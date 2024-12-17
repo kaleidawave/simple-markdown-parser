@@ -93,9 +93,7 @@ impl RawText<'_> {
                 | MarkdownTextElement::Subscript(i)
                 | MarkdownTextElement::Superscript(i)
                 | MarkdownTextElement::Tag(i) => s.push_str(i),
-                MarkdownTextElement::Link { on, to: _, } => {
-                    s.push_str(&on.no_modifiers())
-                }
+                MarkdownTextElement::Link { on, to: _ } => s.push_str(&on.no_modifiers()),
             }
         }
         s
