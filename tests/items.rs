@@ -1,10 +1,10 @@
 #[test]
 fn scan() {
-    let source: &str = r#"
+    let source: &str = r"
 # The `parse` API
 
 The `parse` API takes a callback that is called on each [markdown](https://www.markdownguide.org/) item. The inner text decoration is **skipped** on the first pass but can be *picked up* later using `RawText::parts`, which returns a `PartsIterator` to get the individual sections.
-"#;
+";
 
     let _ = simple_markdown_parser::parse(source, |item| {
         use simple_markdown_parser::{MarkdownElement, MarkdownTextElement, RawText};

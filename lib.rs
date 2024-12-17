@@ -36,6 +36,7 @@ pub enum MarkdownElement<'a> {
 }
 
 impl MarkdownElement<'_> {
+    #[must_use]
     pub fn as_markdown(&self) -> String {
         match self {
             Self::Heading { level, text } => {
@@ -73,10 +74,12 @@ impl MarkdownElement<'_> {
 pub struct RawText<'a>(pub &'a str);
 
 impl RawText<'_> {
+    #[must_use]
     pub fn parts(&self) -> PartsIterator<'_> {
         PartsIterator::new(self.0)
     }
 
+    #[must_use]
     pub fn no_modifiers(&self) -> String {
         let mut s = String::new();
         for part in PartsIterator::new(self.0) {
@@ -135,7 +138,7 @@ pub enum MarkdownTextElement<'a> {
 #[allow(clippy::needless_lifetimes)]
 fn decide<'a>(item: &'a str) -> MarkdownElement<'a> {
     let item = item.trim();
-    if item.starts_with("#") {
+    if item.starts_with('#') {
         let level = item.chars().take_while(|c| *c == '#').count();
         MarkdownElement::Heading {
             level: level.try_into().expect("deep header"),
@@ -187,7 +190,7 @@ pub fn parse<'a>(on: &'a str, mut cb: impl FnMut(MarkdownElement<'a>)) -> Result
                 // TODO other motifiers here
                 let language = rest.trim_end();
                 current_code_language = Some(language);
-            } else if line.starts_with("|") {
+            } else if line.starts_with('|') {
                 todo!("table")
             } else {
                 let result = decide(line);
@@ -231,6 +234,7 @@ pub struct PartsIterator<'a> {
 }
 
 impl<'a> PartsIterator<'a> {
+    #[must_use]
     pub fn new(on: &'a str) -> Self {
         Self {
             on,

@@ -1,6 +1,8 @@
+use simple_markdown_parser::{MarkdownElement, RawText};
+
 #[test]
 fn scan() {
-    let source: &str = r#"
+    let source: &str = r"
 # Hello world
 
 ## Under heading
@@ -19,7 +21,7 @@ this is some code
 ## Another item
 
 Paragraph here
-"#;
+";
 
     let mut output = Vec::new();
 
@@ -29,8 +31,6 @@ Paragraph here
             output.push((header_chain.to_owned(), item));
         },
     );
-
-    use simple_markdown_parser::{MarkdownElement, RawText};
 
     let expected = vec![
         (
