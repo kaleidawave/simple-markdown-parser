@@ -1,7 +1,7 @@
 #![doc = include_str!("./README.md")]
 
 /// Markdown block element
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MarkdownElement<'a> {
     Heading {
         level: u8,
@@ -69,17 +69,41 @@ impl MarkdownElement<'_> {
 }
 
 /// (unsplit) Text inside markdown item
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct RawText<'a>(pub &'a str);
 
 impl RawText<'_> {
-    // pub fn no_modifiers(&self) -> String {
-    //     self.0.to_owned
-    // }
+    pub fn parts(&self) -> PartsIterator<'_> {
+        PartsIterator::new(self.0)
+    }
+
+    pub fn no_modifiers(&self) -> String {
+        let mut s = String::new();
+        for part in PartsIterator::new(self.0) {
+            match part {
+                MarkdownTextElement::Plain(i)
+                | MarkdownTextElement::Bold(i)
+                | MarkdownTextElement::Italic(i)
+                | MarkdownTextElement::BoldAndItalic(i)
+                | MarkdownTextElement::Code(i)
+                | MarkdownTextElement::StrikeThrough(i)
+                | MarkdownTextElement::Emoji(i)
+                | MarkdownTextElement::Latex(i)
+                | MarkdownTextElement::Highlight(i)
+                | MarkdownTextElement::Subscript(i)
+                | MarkdownTextElement::Superscript(i)
+                | MarkdownTextElement::Tag(i) => s.push_str(i),
+                MarkdownTextElement::Link { on, to: _, } => {
+                    s.push_str(&on.no_modifiers())
+                }
+            }
+        }
+        s
+    }
 }
 
 /// Some are prefixes, some are wrapped
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MarkdownTextElement<'a> {
     Plain(&'a str),
     // **hi**
@@ -121,6 +145,8 @@ fn decide<'a>(item: &'a str) -> MarkdownElement<'a> {
         }
     } else if let Some(item) = item.strip_prefix('>') {
         MarkdownElement::Quote(RawText(item))
+    } else if let "---" = item {
+        MarkdownElement::HorizontalRule
     } else if let Some(item) = item.trim_start().strip_prefix('-') {
         // TODO one or the other
         let level = item.chars().take_while(|c| *c == '\t' || *c == ' ').count();
@@ -192,33 +218,6 @@ pub fn parse<'a>(on: &'a str, mut cb: impl FnMut(MarkdownElement<'a>)) -> Result
     Ok(())
 }
 
-/// Additional utilities for parsing markdown
-pub mod utilities {
-    use super::{parse, MarkdownElement, RawText};
-
-    #[allow(clippy::result_unit_err)]
-    pub fn parse_with_header_information<'a>(
-        on: &'a str,
-        mut cb: impl for<'b> FnMut(&'b Vec<RawText<'a>>, MarkdownElement<'a>),
-    ) -> Result<(), ()> {
-        let mut header_chain = Vec::new();
-        parse(on, |element| {
-            if let MarkdownElement::Heading { level, text } = element {
-                let raw_level = level as usize - 1;
-                if header_chain.len() < raw_level {
-                    header_chain.extend((header_chain.len()..raw_level).map(|_| RawText("")));
-                } else {
-                    let _ = header_chain.drain(raw_level..);
-                }
-                cb(&header_chain, element);
-                header_chain.push(text);
-            } else {
-                cb(&header_chain, element);
-            }
-        })
-    }
-}
-
 /// Work in progress abstraction for iterating over markdown text sections giving decoration (bold, links, etc) information
 /// TODO state
 pub struct PartsIterator<'a> {
@@ -230,6 +229,7 @@ pub struct PartsIterator<'a> {
     in_code: bool,
     in_latex: bool,
     in_emoji: bool,
+    in_link: bool,
 }
 
 impl<'a> PartsIterator<'a> {
@@ -243,6 +243,7 @@ impl<'a> PartsIterator<'a> {
             in_emoji: false,
             in_code: false,
             in_latex: false,
+            in_link: false,
         }
     }
 }
@@ -255,12 +256,42 @@ impl<'a> Iterator for PartsIterator<'a> {
             None
         } else {
             let range = &self.on[self.last..];
+            let mut link_text_end: Option<usize> = None;
+
             for (idx, chr) in range.char_indices() {
+                if self.in_link {
+                    if let Some(link_text_end) = link_text_end {
+                        if idx == link_text_end + 1 {
+                            if chr != '(' {
+                                self.last += idx;
+                                self.in_link = false;
+                                return Some(MarkdownTextElement::Link {
+                                    on: RawText(&range[..link_text_end]),
+                                    to: "",
+                                });
+                            }
+                        } else if let ')' = chr {
+                            self.last += idx + 1;
+                            self.in_link = false;
+                            return Some(MarkdownTextElement::Link {
+                                on: RawText(&range[..link_text_end]),
+                                to: &range[link_text_end + "](".len()..idx],
+                            });
+                        }
+                    } else if let ']' = chr {
+                        link_text_end = Some(idx);
+                    }
+                    continue;
+                }
+
                 // TODO escaped stuff etc
-                if let (true, '`') = (self.in_code, chr) {
-                    self.last += idx + 1;
-                    self.in_code = false;
-                    return Some(MarkdownTextElement::Code(&range[..idx]));
+                if self.in_code {
+                    if let '`' = chr {
+                        self.last += idx + 1;
+                        self.in_code = false;
+                        return Some(MarkdownTextElement::Code(&range[..idx]));
+                    }
+                    continue;
                 }
                 // TODO escaped stuff etc
                 if let (true, '$') = (self.in_latex, chr) {
@@ -307,24 +338,34 @@ impl<'a> Iterator for PartsIterator<'a> {
                         return Some(MarkdownTextElement::Plain(&range[..idx]));
                     }
                     '*' => {
-                        self.last += idx + 1;
-                        let existing = self.in_italic;
-                        self.in_italic = !existing;
+                        // dbg!(&range[idx..]);
+                        // TODO not quite right. also _
                         let to_return = &range[..idx];
-                        return if existing {
-                            Some(MarkdownTextElement::Italic(to_return))
+                        let returned = if range[idx..].starts_with("**") {
+                            self.last += idx + 2;
+                            let existing = self.in_bold;
+                            self.in_bold = !existing;
+                            if existing {
+                                MarkdownTextElement::Bold(to_return)
+                            } else {
+                                MarkdownTextElement::Plain(to_return)
+                            }
                         } else {
-                            Some(MarkdownTextElement::Plain(to_return))
+                            self.last += idx + 1;
+                            let existing = self.in_italic;
+                            self.in_italic = !existing;
+                            if existing {
+                                MarkdownTextElement::Italic(to_return)
+                            } else {
+                                MarkdownTextElement::Plain(to_return)
+                            }
                         };
+                        return Some(returned);
                     }
                     '[' => {
                         self.last += idx + 1;
-                        todo!("tag")
-                        // return if existing {
-                        //     Some(MarkdownTextElement::Italic(to_return))
-                        // } else {
-                        //     Some(MarkdownTextElement::Plain(to_return))
-                        // };
+                        self.in_link = true;
+                        return Some(MarkdownTextElement::Plain(&range[..idx]));
                     }
                     _ => {}
                 }
@@ -333,5 +374,32 @@ impl<'a> Iterator for PartsIterator<'a> {
             // TODO left overs, tags etc
             Some(MarkdownTextElement::Plain(range))
         }
+    }
+}
+
+/// Additional utilities for parsing markdown
+pub mod utilities {
+    use super::{parse, MarkdownElement, RawText};
+
+    #[allow(clippy::result_unit_err)]
+    pub fn parse_with_header_information<'a>(
+        on: &'a str,
+        mut cb: impl for<'b> FnMut(&'b Vec<RawText<'a>>, MarkdownElement<'a>),
+    ) -> Result<(), ()> {
+        let mut header_chain = Vec::new();
+        parse(on, |element| {
+            if let MarkdownElement::Heading { level, text } = element {
+                let raw_level = level as usize - 1;
+                if header_chain.len() < raw_level {
+                    header_chain.extend((header_chain.len()..raw_level).map(|_| RawText("")));
+                } else {
+                    let _ = header_chain.drain(raw_level..);
+                }
+                cb(&header_chain, element);
+                header_chain.push(text);
+            } else {
+                cb(&header_chain, element);
+            }
+        })
     }
 }

@@ -1,5 +1,8 @@
 [package]
 name = "simple-markdown-parser"
+description = "A simple library for handling markdown. May include extra utilities"
+license = "MIT"
+repository = "https://github.com/kaleidawave/simple-markdown-parser"
 version = "0.0.0"
 edition = "2021"
 
