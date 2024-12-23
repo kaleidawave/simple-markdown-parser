@@ -57,7 +57,7 @@ jobs:
           jq "$selections" pkg/package.json > pkg/jsr.json
   
       - name: Publish on JSR
-        run: deno publish
+        run: deno publish --allow-dirty
         working-directory: pkg
         
       - name: Push updated Cargo.toml
