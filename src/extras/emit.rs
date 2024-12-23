@@ -42,7 +42,7 @@ pub trait FeatureEmitter {
 
     fn latex(&self, code: &str) -> String;
 
-    fn command(&self, name: &str, arguments: Vec<(&str, &str)>, inner: &str) -> String;
+    fn command(&self, name: &str, args: Vec<(&str, &str)>, inner: &str) -> String;
 
     fn interpolation(&self, expression: &str) -> String;
 }
@@ -59,7 +59,7 @@ impl FeatureEmitter for BlankFeatureEmitter {
         panic!("`BlankFeatureEmitter` does implement LaTeX HTML generation");
     }
 
-    fn command(&self, _name: &str, _arguments: Vec<(&str, &str)>, _inner: &str) -> String {
+    fn command(&self, _name: &str, _args: Vec<(&str, &str)>, _inner: &str) -> String {
         panic!("`BlankFeatureEmitter` does implement command generation")
     }
 
@@ -69,7 +69,7 @@ impl FeatureEmitter for BlankFeatureEmitter {
 }
 
 #[cfg(target_family = "wasm")]
-#[wasm_bindgen]
+#[wasm_bindgen(skip_typescript)]
 pub struct FeatureEmitterWASM {
     code_block_callback: js_sys::Function,
     latex_callback: js_sys::Function,
@@ -84,7 +84,7 @@ export class FeatureEmitterWASM {
     constructor(
         code_block_callback: (language: string, code: string) => string,
         latex_callback: (code: string) => string,
-        command_callback: (name: string, arguments: Array<[string, string]>, inner: string) => string,
+        command_callback: (name: string, args: Array<[string, string]>, inner: string) => string,
         interpolation_callback: (expression: string) => string,
     );
 }
@@ -136,17 +136,17 @@ impl FeatureEmitter for FeatureEmitterWASM {
         result_to_string(result)
     }
 
-    fn command(&self, name: &str, arguments: Vec<(&str, &str)>, inner: &str) -> String {
+    fn command(&self, name: &str, args: Vec<(&str, &str)>, inner: &str) -> String {
         use js_sys::Array;
 
-        let arguments_array = Array::new();
-        arguments.into_iter().for_each(|(l, r)| {
-            arguments_array.push(&Array::of2(&JsValue::from_str(l), &JsValue::from_str(r)).into());
+        let args_array = Array::new();
+        args.into_iter().for_each(|(l, r)| {
+            args_array.push(&Array::of2(&JsValue::from_str(l), &JsValue::from_str(r)).into());
         });
         let result = self.command_callback.call3(
             &JsValue::NULL,
             &JsValue::from_str(name),
-            &arguments_array.into(),
+            &args_array.into(),
             &JsValue::from_str(inner),
         );
         result_to_string(result)

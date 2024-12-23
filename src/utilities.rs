@@ -196,6 +196,7 @@ pub fn extract_slides(on: &str) -> Vec<Slide> {
     let mut current_slide = Slide::default();
     let mut start: usize = 0;
 
+    // TODO could just use `.lines` rather than whole `parse`
     let _result = parse(on, |element| {
         if let MarkdownElement::Heading { level, text } = element {
             if level < 3 {
