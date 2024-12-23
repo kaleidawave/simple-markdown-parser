@@ -4,13 +4,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let content = std::fs::read_to_string(path)?;
 
     #[derive(Debug, Default)]
-    struct LexicalAnalyser1 {
+    struct Store {
         words: std::collections::HashMap<String, usize>,
         sentences: Vec<String>,
         paragraphs: Vec<String>,
     }
 
-    impl simple_markdown_parser::utilities::LexicalAnalyser for LexicalAnalyser1 {
+    impl simple_markdown_parser::utilities::lexical_analysis::LexicalAnalyser for Store {
         fn word(&mut self, word: &str) {
             self.words
                 .entry(word.trim().to_lowercase())
@@ -29,9 +29,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let mut analyser = LexicalAnalyser1::default();
+    let mut analyser = Store::default();
 
-    let _ = simple_markdown_parser::utilities::lexical_analysis(&content, &mut analyser);
+    let _ = simple_markdown_parser::utilities::lexical_analysis::lexical_analysis(
+        &content,
+        &mut analyser,
+    );
 
     eprintln!("Finished:");
     eprintln!("\tWords: {words:#?}", words = analyser.words);

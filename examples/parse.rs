@@ -3,26 +3,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = args.pop_front().ok_or("expected argument")?;
     let content = std::fs::read_to_string(path)?;
 
-    let _ = simple_markdown_parser::parse(&content, |item| {
-        eprintln!("{item:?}");
-
-        if let simple_markdown_parser::MarkdownElement::Paragraph(item) = item {
+    fn handler(item: simple_markdown_parser::MarkdownElement) {
+        if let simple_markdown_parser::MarkdownElement::CommandBlock(block) = item {
             eprintln!(
-                "parts={inner:?}",
-                inner = item
-                    .parts()
-                    .flat_map(|part| match part {
-                        simple_markdown_parser::MarkdownTextElement::Link { on, .. } => {
-                            let mut inner = vec![part];
-                            inner.extend(on.parts());
-                            inner
-                        }
-                        part => vec![part],
-                    })
-                    .collect::<Vec<_>>()
+                "MarkdownElement::CommandBlock {{ name: {name:?}, arguments: {arguments:?} }} [",
+                name = block.name,
+                arguments = block.arguments()
             );
+            let _ = simple_markdown_parser::parse(&block.inner.0, handler);
+            eprintln!("] End of {name:?}", name = block.name);
+            return;
+        } else {
+            if let Some(parts) = item.parts_like() {
+                eprint!("{} -> ", item.debug_without_text());
+                eprintln!(
+                    "parts={inner:?}",
+                    inner = parts
+                        .parts()
+                        .flat_map(|part| match part {
+                            simple_markdown_parser::MarkdownTextElement::Link { on, .. } => {
+                                on.parts().collect::<Vec<_>>()
+                            }
+                            part => vec![part],
+                        })
+                        .collect::<Vec<_>>()
+                );
+            } else {
+                eprintln!("{:?}", item);
+            }
         }
-    });
+    }
+
+    let _ = simple_markdown_parser::parse(&content, handler);
 
     eprintln!("finished");
 

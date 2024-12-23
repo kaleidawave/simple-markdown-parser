@@ -1,4 +1,4 @@
-use simple_markdown_parser::{MarkdownElement, RawText};
+use simple_markdown_parser::{MarkdownElement, RawMarkdown, RawText};
 
 #[test]
 fn scan() {
@@ -21,6 +21,22 @@ this is some code
 ## Another item
 
 Paragraph here
+
+$$
+\int_0^1 x^2\operatorname{d}x
+$$
+
+# Back to main
+
+Below is a comment
+
+%% this is a comment %%
+
+Something
+
+%% 
+this is another comment 
+%%
 ";
 
     let mut output = Vec::new();
@@ -51,7 +67,7 @@ Paragraph here
             vec![RawText("Hello world"), RawText("Under heading")],
             MarkdownElement::CodeBlock {
                 language: "ts",
-                content: "this is some code\n",
+                code: "this is some code\n",
             },
         ),
         (
@@ -70,7 +86,7 @@ Paragraph here
         ),
         (
             vec![RawText("Hello world"), RawText("Under heading")],
-            MarkdownElement::Quote(RawText(" Some block quote")),
+            MarkdownElement::Quote(RawMarkdown(" Some block quote")),
         ),
         (
             vec![RawText("Hello world"), RawText("Under heading")],
@@ -86,6 +102,35 @@ Paragraph here
         (
             vec![RawText("Hello world"), RawText("Another item")],
             MarkdownElement::Paragraph(RawText("Paragraph here")),
+        ),
+        (
+            vec![RawText("Hello world"), RawText("Another item")],
+            MarkdownElement::LaTeXBlock {
+                script: "\\int_0^1 x^2\\operatorname{d}x",
+            },
+        ),
+        (
+            vec![],
+            MarkdownElement::Heading {
+                level: 1,
+                text: RawText("Back to main"),
+            },
+        ),
+        (
+            vec![RawText("Back to main")],
+            MarkdownElement::Paragraph(RawText("Below is a comment")),
+        ),
+        (
+            vec![RawText("Back to main")],
+            MarkdownElement::CommentBlock("this is a comment"),
+        ),
+        (
+            vec![RawText("Back to main")],
+            MarkdownElement::Paragraph(RawText("Something")),
+        ),
+        (
+            vec![RawText("Back to main")],
+            MarkdownElement::CommentBlock("this is another comment"),
         ),
     ];
 
