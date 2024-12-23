@@ -11,24 +11,48 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # The OIDC ID token is used for authentication with JSR.
     steps:
       - uses: actions/checkout@v4
       - name: Set git credentials
         run: |
           git config user.name github-actions
           git config user.email github-actions@github.com
+
       - name: Crates publish
         uses: kaleidawave/crates-release-gh-action@main
         id: release
         with:
           version: ${{ github.event.inputs.version }}
           crates-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Build and publish JS packages
+        run: | 
+          wasm-pack build --target web --out-name build
+
+          echo 'import{initSync}from"./build.js";initSync({module:await fetch(import.meta.resolve("./build_bg.wasm")).then(r=>r.arrayBuffer())});export*from"./build.js";' > pkg/main.js
+
+          modifications='.module = "main.js" | .main = "main.js" | .exports["./uninitialised"] = "./build.js" | .exports["."] = "./main.js"'
+
+          cat pkg/package.json | jq "$modifications" > pkg/package.json
+
+          echo "/// <reference types="./build.d.ts" />" >> pkg/main.js
+          echo "/// <reference types="./build.d.ts" />" >> pkg/build.js
+
+          selections='{ name: ("@bengineering/" + .name), version: .version, license: .license, exclude: (.files | .[length] |= "main.js" | map("!./" + .)), exports: .exports }'
+          cat pkg/package.json | jq "$selections" > pkg/jsr.json
+
+          cd pkg && deno publish --allow-dirty && cd ..
+        
       - name: Push updated Cargo.toml
         run: |
           git add .
           git commit -m "Release: ${{ steps.release.outputs.new-versions-description }}"
           git tag "release/${{ steps.release.outputs.new-version }}"
           git push --tags origin main
+
       - name: Discord
         uses: rjstone/discord-webhook-notify@master
         with:
