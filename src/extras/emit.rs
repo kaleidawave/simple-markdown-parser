@@ -24,13 +24,17 @@ pub fn markdown_to_html(
     out: &mut impl Write,
     emitter: &mut impl FeatureEmitter,
 ) -> Result<(), ()> {
-    let mut last_was_list_item: bool = false;
+    let mut last_was_list_item: Option<&'static str> = None;
     crate::parse(source, |item| {
-        let is_list_item = matches!(&item, MarkdownElement::ListItem { .. });
-        if !last_was_list_item && is_list_item {
-            writeln!(out, "<ul>").unwrap();
-        } else if last_was_list_item && !is_list_item {
-            writeln!(out, "</ul>").unwrap();
+        let is_list_item = if let MarkdownElement::ListItem { enumerated, .. } = item {
+            Some(if enumerated { "ol" } else { "ul" })
+        } else {
+            None
+        };
+        if let (Some(tag), None) = (is_list_item, last_was_list_item) {
+            writeln!(out, "<{tag}>").unwrap();
+        } else if let (None, Some(tag)) = (is_list_item, last_was_list_item) {
+            writeln!(out, "</{tag}>").unwrap();
         }
         element_to_html(out, emitter, item).unwrap();
         last_was_list_item = is_list_item;
@@ -192,12 +196,13 @@ pub fn element_to_html(
         MarkdownElement::ListItem {
             level: _level,
             text,
+            enumerated: _,
         } => {
             writeln!(out, "<li>")?;
             inner_to_html(out, emitter, text)?;
             writeln!(out, "</li>")?;
         }
-        // TODO
+        // TODO test
         MarkdownElement::Table(table) => {
             writeln!(out, "<table>")?;
             let mut rows = table.rows();

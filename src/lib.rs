@@ -10,13 +10,14 @@ pub enum MarkdownElement<'a> {
         level: u8,
         text: RawText<'a>,
     },
-    Quote(RawMarkdown<'a>),
+    Quote(RawText<'a>),
     Paragraph(RawText<'a>),
     ListItem {
         level: u8,
         text: RawText<'a>,
+        /// TODO probably need more options here
+        enumerated: bool,
     },
-    // TODO
     Table(Table<'a>),
     // TODO modifiers
     CodeBlock {
@@ -54,7 +55,12 @@ impl MarkdownElement<'_> {
                 s.push(' ');
                 s
             }
-            Self::ListItem { level, text } => {
+            Self::ListItem {
+                level,
+                text,
+                enumerated: _,
+            } => {
+                // TODO enumerated
                 let mut s = "\t".repeat(*level as usize);
                 s.push_str("- ");
                 s.push_str(text.0);
@@ -71,6 +77,9 @@ impl MarkdownElement<'_> {
             Self::Paragraph(text) => text.0.to_owned(),
             Self::Quote(text) => {
                 format!("> {text}", text = text.0)
+            }
+            Self::Frontmatter(source) => {
+                format!("---\n{source}---")
             }
             Self::Empty => String::new(),
             item => format!("TODO {item:?}"),
@@ -94,7 +103,7 @@ impl MarkdownElement<'_> {
     pub fn parts_like(&self) -> Option<RawText> {
         if let MarkdownElement::Heading { text, .. }
         | MarkdownElement::Paragraph(text)
-        | MarkdownElement::ListItem { level: _, text } = self
+        | MarkdownElement::ListItem { text, .. } = self
         {
             Some(*text)
         } else if let MarkdownElement::Quote(text) = self {
@@ -114,8 +123,12 @@ impl MarkdownElement<'_> {
             }
             MarkdownElement::Quote(_) => "Quote".to_owned(),
             MarkdownElement::Paragraph(_) => "Paragraph".to_owned(),
-            MarkdownElement::ListItem { level, text: _ } => {
-                format!("ListItem {{ level: {level} }}")
+            MarkdownElement::ListItem {
+                level,
+                text: _,
+                enumerated,
+            } => {
+                format!("ListItem {{ level: {level}, enumerated: {enumerated:?} }}")
             }
             MarkdownElement::Table(_table) => "Table".to_owned(),
             MarkdownElement::CodeBlock { language, code: _ } => format!("CodeBlock ({language})"),
@@ -217,50 +230,18 @@ impl<'a> MarkdownTextElement<'a> {
     }
 }
 
-// TODO want to do in main loop
-#[allow(clippy::needless_lifetimes)]
-fn decide<'a>(item: &'a str) -> MarkdownElement<'a> {
-    let item = item.trim();
-    if item.starts_with('#') {
-        let level = item.chars().take_while(|c| *c == '#').count();
-        MarkdownElement::Heading {
-            level: level.try_into().expect("deep header"),
-            text: RawText(item[level..].trim()),
-        }
-    } else if let Some(item) = item.strip_prefix('>') {
-        MarkdownElement::Quote(RawMarkdown(item))
-    } else if let "---" = item {
-        MarkdownElement::HorizontalRule
-    } else if let Some(item) = item.trim_start().strip_prefix('-') {
-        // TODO one or the other
-        let level = item.chars().take_while(|c| *c == '\t' || *c == ' ').count();
-        MarkdownElement::ListItem {
-            level: level.try_into().expect("deep list item"),
-            text: RawText(item.trim()),
-        }
-    } else if item.is_empty() {
-        MarkdownElement::Empty
-    } else {
-        MarkdownElement::Paragraph(RawText(item))
-    }
-}
-
 #[derive(Default, Copy, Clone)]
 pub struct ParseOptions {
-    include_new_lines: bool,
+    pub include_new_lines: bool,
+    /// Also allows for `![INFO]` syntax
+    pub options_and_markdown_in_quotes: bool,
+    pub allow_asterisk_and_plus_as_list_prefixes: bool,
 }
 
 /// # Errors
 /// errors for unclosed blocks
 pub fn parse<'a>(on: &'a str, cb: impl FnMut(MarkdownElement<'a>)) -> Result<(), ()> {
     parse_with_options(on, &ParseOptions::default(), cb)
-}
-
-pub fn strip_surrounds<'a>(on: &'a str, left: &str, right: &str) -> Option<&'a str> {
-    on.trim()
-        .strip_prefix(left)
-        .and_then(|line| line.strip_suffix(right))
-        .map(str::trim)
 }
 
 /// Parse source using callback
@@ -272,6 +253,54 @@ pub fn parse_with_options<'a>(
     options: &ParseOptions,
     mut cb: impl FnMut(MarkdownElement<'a>),
 ) -> Result<(), ()> {
+    #[allow(clippy::needless_lifetimes)]
+    fn classify_line<'a>(item: &'a str, options: &ParseOptions) -> MarkdownElement<'a> {
+        let trimmed = item.trim();
+
+        let list_prefixes: &[char] = if options.allow_asterisk_and_plus_as_list_prefixes {
+            &['-', '+', '*']
+        } else {
+            &['-']
+        };
+
+        if trimmed.is_empty() {
+            MarkdownElement::Empty
+        } else if let "---" = trimmed {
+            MarkdownElement::HorizontalRule
+        } else if let Some(item) = trimmed.strip_prefix('>') {
+            MarkdownElement::Quote(RawText(item))
+        } else if trimmed.starts_with('#') {
+            let level = trimmed.chars().take_while(|c| *c == '#').count();
+            if trimmed[level..].starts_with(char::is_whitespace) {
+                MarkdownElement::Heading {
+                    level: level.try_into().expect("deep header"),
+                    text: RawText(item[level..].trim()),
+                }
+            } else {
+                // Fix for tags
+                MarkdownElement::Paragraph(RawText(trimmed))
+            }
+        } else if let Some(trimmed) = trimmed.trim_start().strip_prefix(list_prefixes) {
+            // TODO one or the other
+            let level = item.chars().take_while(|c| *c == '\t' || *c == ' ').count();
+            MarkdownElement::ListItem {
+                level: level.try_into().expect("deep list item"),
+                text: RawText(trimmed),
+                enumerated: false,
+            }
+        } else if let Some(trimmed) = strip_number_prefix(trimmed) {
+            let level = item.chars().take_while(|c| *c == '\t' || *c == ' ').count();
+            MarkdownElement::ListItem {
+                // TODO take number
+                level: level.try_into().expect("deep list item"),
+                text: RawText(trimmed.trim()),
+                enumerated: true,
+            }
+        } else {
+            MarkdownElement::Paragraph(RawText(trimmed))
+        }
+    }
+
     let mut since_new_line = 0;
     let mut start = 0;
 
@@ -284,6 +313,8 @@ pub fn parse_with_options<'a>(
     let mut in_table = false;
     let mut in_latex_block = false;
     let mut in_markdown_comment = false;
+    // For special syntax
+    let mut quote_command: Option<&str> = None;
 
     for (idx, chr) in on.char_indices() {
         if let '\n' = chr {
@@ -347,12 +378,27 @@ pub fn parse_with_options<'a>(
 
             if in_table {
                 if !line.ends_with('|') {
-                    cb(MarkdownElement::Table(Table(&on[start..since_new_line])));
+                    cb(MarkdownElement::Table(Table(
+                        &on[start..since_new_line].trim(),
+                    )));
                     in_table = false;
                     start = idx + 1;
                 }
-                since_new_line = idx + 1;
-                continue;
+            }
+
+            if let Some(arguments) = quote_command {
+                if let Some(content) = line.strip_prefix("> ") {
+                    let command_block = CommandBlock {
+                        name: "quote",
+                        arguments,
+                        inner: RawMarkdown(content),
+                    };
+                    cb(MarkdownElement::CommandBlock(command_block));
+                    start = idx + 1;
+                    continue;
+                } else {
+                    quote_command = None;
+                }
             }
 
             let is_horizontal_rule = "---" == line.trim();
@@ -374,6 +420,15 @@ pub fn parse_with_options<'a>(
                 current_code_language = Some(language);
             } else if let "$$" = line.trim() {
                 in_latex_block = true;
+            } else if line.starts_with('|') {
+                in_table = true;
+                continue;
+            } else if let (true, Some(inner)) = (
+                options.options_and_markdown_in_quotes,
+                line.strip_prefix('>'),
+            ) {
+                let command = strip_surrounds(inner, "![", "]").unwrap_or_default();
+                quote_command = Some(command);
             } else if let Some(line) = line.trim_start().strip_prefix("%%") {
                 if let Some(out) = line.trim_end().strip_suffix("%%") {
                     cb(MarkdownElement::CommentBlock(out.trim()));
@@ -386,7 +441,7 @@ pub fn parse_with_options<'a>(
                 current_command_and_arguments =
                     Some(command_line.split_once(' ').unwrap_or((command_line, "")));
             } else {
-                let result = decide(line);
+                let result = classify_line(line, options);
                 let to_add = !matches!(
                     (options.include_new_lines, result),
                     (false, MarkdownElement::Empty)
@@ -411,7 +466,7 @@ pub fn parse_with_options<'a>(
         cb(MarkdownElement::Table(Table(&on[start..since_new_line])));
     } else {
         let line = &on[start..];
-        let result = decide(line);
+        let result = classify_line(line, options);
         let to_add = !matches!(
             (options.include_new_lines, result),
             (false, MarkdownElement::Empty)
@@ -436,10 +491,11 @@ pub struct PartsIterator<'a> {
     in_code: bool,
     in_latex: bool,
     in_emoji: bool,
-    in_link: bool,
-    in_chevron_link: bool,
-    in_media: bool,
     in_expression: bool,
+    in_chevron_link: bool,
+    in_link: bool,
+    in_internal_link: bool,
+    in_media: bool,
 }
 
 impl<'a> PartsIterator<'a> {
@@ -456,6 +512,7 @@ impl<'a> PartsIterator<'a> {
             in_latex: false,
             in_link: false,
             in_chevron_link: false,
+            in_internal_link: false,
             in_media: false,
             in_expression: false,
         }
@@ -484,14 +541,15 @@ impl<'a> Iterator for PartsIterator<'a> {
                                 if self.in_link {
                                     self.last += idx;
                                     self.in_link = false;
+                                    self.in_media = false;
                                     return Some(MarkdownTextElement::Link {
-                                        on: RawText(&range[..link_text_end]),
-                                        to: "",
+                                        on: RawText(""),
+                                        to: &range[..link_text_end],
                                     });
                                 }
                                 panic!("media parsing broken {chr}");
                             }
-                        } else if let ')' = chr {
+                        } else if let ')' | ']' = chr {
                             let in_brackets = &range[..link_text_end];
                             let in_parenthesis = &range[link_text_end + "](".len()..idx];
                             let element = if self.in_link {
@@ -512,13 +570,36 @@ impl<'a> Iterator for PartsIterator<'a> {
                             return Some(element);
                         }
                     } else if let ']' = chr {
-                        if let Some(reduced_depth) = bracket_depth.checked_sub(1) {
+                        if self.in_internal_link && range[idx..].starts_with("]]") {
+                            let element = if self.in_link {
+                                self.in_link = false;
+                                MarkdownTextElement::Link {
+                                    on: RawText(""),
+                                    to: &range[1..idx],
+                                }
+                            } else {
+                                self.in_media = false;
+                                MarkdownTextElement::Media {
+                                    alt: "",
+                                    source: &range[1..idx],
+                                }
+                            };
+
+                            self.last += idx + 2;
+                            return Some(element);
+                        } else if let Some(reduced_depth) = bracket_depth.checked_sub(1) {
                             bracket_depth = reduced_depth;
                         } else {
                             link_text_end = Some(idx);
                         }
                     } else if let '[' = chr {
-                        bracket_depth += 1;
+                        if idx == 0 {
+                            self.in_internal_link = true;
+                            // Reset
+                            // range = &self.on[idx..];
+                        } else {
+                            bracket_depth += 1;
+                        }
                     }
 
                     continue;
@@ -658,6 +739,9 @@ impl<'a> Iterator for PartsIterator<'a> {
             self.last = self.on.len();
             if range.is_empty() {
                 None
+            } else if let Some(_link_text_end) = link_text_end {
+                eprintln!("Link text end!!");
+                None
             } else {
                 // TODO errors left overs. But also others such as tags etc
                 Some(MarkdownTextElement::Plain(range))
@@ -681,7 +765,7 @@ pub struct RawMarkdown<'a>(pub &'a str);
 // }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct Table<'a>(pub(crate) &'a str);
+pub struct Table<'a>(pub &'a str);
 
 impl<'a> Table<'a> {
     pub fn rows(&self) -> impl Iterator<Item = TableRow<'a>> {
@@ -734,6 +818,7 @@ impl<'a> CommandBlock<'a> {
                 }
             }
         }
+
         if let Some(current_key) = key {
             if in_string {
                 eprintln!("missing '\"'");
@@ -742,6 +827,26 @@ impl<'a> CommandBlock<'a> {
             arguments.push((current_key, value));
         }
 
+        if !self.arguments.is_empty() && arguments.is_empty() {
+            arguments.push(("", self.arguments));
+        }
+
         arguments
     }
+}
+
+fn strip_number_prefix(on: &str) -> Option<&str> {
+    if on.starts_with(|chr: char| matches!(chr, '1'..'9')) {
+        let level = on.chars().take_while(|c| matches!(*c, '1'..'9')).count();
+        on[level..].strip_prefix([')', '.'])
+    } else {
+        None
+    }
+}
+
+fn strip_surrounds<'a>(on: &'a str, left: &str, right: &str) -> Option<&'a str> {
+    on.trim()
+        .strip_prefix(left)
+        .and_then(|line| line.strip_suffix(right))
+        .map(str::trim)
 }

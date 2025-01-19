@@ -30,7 +30,7 @@ pub fn parse_with_header_information<'a>(
 /// # Errors
 /// errors from markdown parsing
 #[allow(clippy::result_unit_err)]
-pub fn parse_blocks<'a>(
+pub fn parse_sections<'a>(
     on: &'a str,
     mut cb: impl for<'b> FnMut(&'b Vec<RawText<'a>>, &'b [MarkdownElement<'a>]),
 ) -> Result<(), ()> {
@@ -64,7 +64,7 @@ pub fn parse_blocks<'a>(
     result
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 #[cfg_attr(
     target_family = "wasm",
     derive(tsify::Tsify, serde::Serialize),
@@ -78,6 +78,46 @@ pub struct CodeBlock {
     information: String,
     /// From list items
     items: Vec<String>,
+}
+
+pub fn parse_code_blocks(on: &str, mut cb: impl FnMut(CodeBlock)) -> Result<(), ()> {
+    let mut header_chain: Vec<RawText> = Vec::new();
+    let mut current_block = CodeBlock::default();
+    // let mut blocks = on.split("\n").collect::<Vec<_>>();
+
+    let result = parse(on, |element| {
+        if let MarkdownElement::Heading { level, text } = element {
+            let mut block = std::mem::take(&mut current_block);
+            if !block.code.is_empty() {
+                block.location = header_chain.iter().map(|link| link.0.to_owned()).collect();
+                cb(block);
+            }
+
+            let raw_level = level as usize - 1;
+            if header_chain.len() < raw_level {
+                header_chain.extend((header_chain.len()..raw_level).map(|_| RawText("")));
+            } else {
+                let _ = header_chain.drain(raw_level..);
+            }
+            header_chain.push(text);
+        } else if let MarkdownElement::CodeBlock { language, code } = element {
+            language.clone_into(&mut current_block.language);
+            code.clone_into(&mut current_block.code);
+        } else if let MarkdownElement::Paragraph(content) = element {
+            current_block.information.push_str(content.0);
+        } else if let MarkdownElement::Quote(content) = element {
+            current_block.information.push_str(content.0);
+        } else if let MarkdownElement::ListItem { text, .. } = element {
+            current_block.items.push(text.0.to_owned());
+        }
+    });
+
+    if !current_block.code.is_empty() {
+        current_block.location = header_chain.iter().map(|link| link.0.to_owned()).collect();
+        cb(current_block);
+    }
+
+    result
 }
 
 #[cfg(target_family = "wasm")]
@@ -98,41 +138,8 @@ pub type VecCodeBlock = Vec<CodeBlock>;
 #[must_use]
 #[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn extract_code_blocks(on: &str) -> VecCodeBlock {
-    let mut header_chain: Vec<RawText> = Vec::new();
     let mut blocks: Vec<CodeBlock> = Vec::new();
-    let mut current_block = CodeBlock::default();
-    // let mut blocks = on.split("\n").collect::<Vec<_>>();
-
-    let _result = parse(on, |element| {
-        if let MarkdownElement::Heading { level, text } = element {
-            let mut block = std::mem::take(&mut current_block);
-            if !block.code.is_empty() {
-                block.location = header_chain.iter().map(|link| link.0.to_owned()).collect();
-                blocks.push(block);
-            }
-
-            let raw_level = level as usize - 1;
-            if header_chain.len() < raw_level {
-                header_chain.extend((header_chain.len()..raw_level).map(|_| RawText("")));
-            } else {
-                let _ = header_chain.drain(raw_level..);
-            }
-            header_chain.push(text);
-        } else if let MarkdownElement::CodeBlock { language, code } = element {
-            language.clone_into(&mut current_block.language);
-            code.clone_into(&mut current_block.code);
-        } else if let MarkdownElement::Paragraph(content) = element {
-            current_block.information.push_str(content.0);
-        } else if let MarkdownElement::Quote(content) = element {
-            current_block.information.push_str(content.0);
-        } else if let MarkdownElement::ListItem { level: _, text } = element {
-            current_block.items.push(text.0.to_owned());
-        }
-    });
-
-    if !current_block.code.is_empty() {
-        blocks.push(current_block);
-    }
+    let _result = parse_code_blocks(on, |block| blocks.push(block));
 
     // .into for WASM fix
     #[allow(clippy::useless_conversion)]
@@ -188,6 +195,7 @@ impl Slide {
     }
 }
 
+/// Headings of level 1, 2 & 3 denote sections and slides. Levels 4, 5 & 6 denote inner headings
 #[must_use]
 #[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn extract_slides(on: &str) -> Vec<Slide> {
@@ -196,32 +204,44 @@ pub fn extract_slides(on: &str) -> Vec<Slide> {
     let mut current_slide = Slide::default();
     let mut start: usize = 0;
 
-    // TODO could just use `.lines` rather than whole `parse`
-    let _result = parse(on, |element| {
-        if let MarkdownElement::Heading { level, text } = element {
-            if level < 3 {
+    for line in on.lines() {
+        let heading_level = if line.starts_with('#') {
+            let level = line.chars().take_while(|c| *c == '#').count();
+            // Fixes tags
+            line[level..]
+                .starts_with(char::is_whitespace)
+                .then_some(level)
+        } else {
+            None
+        };
+        if let Some(level) = heading_level {
+            if level <= 3 {
                 let mut slide = std::mem::take(&mut current_slide);
-                let end = text.0.as_ptr() as usize - on.as_ptr() as usize;
-                let content = &on[(start + level as usize)..end];
+
+                let end = line.as_ptr() as usize - on.as_ptr() as usize;
+                let content = &on[start..end];
+
                 if !content.trim().is_empty() {
-                    content.clone_into(&mut current_slide.markdown_content);
+                    content.clone_into(&mut slide.markdown_content);
                     slide.location = header_chain.iter().map(|link| link.0.to_owned()).collect();
                     slides.push(slide);
                 }
+
                 // TODO sub_ptr https://github.com/rust-lang/rust/issues/95892
-                start = (text.0.as_ptr() as usize - on.as_ptr() as usize) + text.0.len();
-            }
+                start = (line.as_ptr() as usize - on.as_ptr() as usize) + line.len();
 
-            let raw_level = level as usize - 1;
-            if header_chain.len() < raw_level {
-                header_chain.extend((header_chain.len()..raw_level).map(|_| RawText("")));
-            } else {
-                let _ = header_chain.drain(raw_level..);
+                let raw_level = level as usize - 1;
+                if header_chain.len() < raw_level {
+                    header_chain.extend((header_chain.len()..raw_level).map(|_| RawText("")));
+                } else {
+                    let _ = header_chain.drain(raw_level..);
+                }
+                header_chain.push(RawText(line[level..].trim()));
             }
-            header_chain.push(text);
         }
-    });
+    }
 
+    // Left over
     {
         let content = &on[start..];
         if !content.trim().is_empty() {
