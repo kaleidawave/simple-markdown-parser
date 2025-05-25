@@ -4,19 +4,21 @@ pub mod extras;
 pub mod utilities;
 
 /// Markdown block element
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum MarkdownElement<'a> {
     Heading {
         level: u8,
         text: RawText<'a>,
     },
-    Quote(RawText<'a>),
+    Quote(QuoteBlock<'a>),
     Paragraph(RawText<'a>),
     ListItem {
         level: u8,
         text: RawText<'a>,
         /// TODO probably need more options here
         enumerated: bool,
+        /// from `- [x]` etc
+        checked: Option<bool>
     },
     Table(Table<'a>),
     // TODO modifiers
@@ -32,7 +34,11 @@ pub enum MarkdownElement<'a> {
     CommentBlock(&'a str),
     /// Includes HTML comments
     // TODO how much to do here
-    HTMLElement(&'a str),
+    #[cfg(feature = "html")]
+    HTMLElement {
+        element: lightml::Element<'a>,
+        source: &'a str,
+    },
     // TODO at start?
     Frontmatter(&'a str),
     HorizontalRule,
@@ -45,7 +51,7 @@ pub enum MarkdownElement<'a> {
     Empty,
 }
 
-impl MarkdownElement<'_> {
+impl<'a> MarkdownElement<'a> {
     #[must_use]
     pub fn as_markdown(&self) -> String {
         match self {
@@ -59,10 +65,14 @@ impl MarkdownElement<'_> {
                 level,
                 text,
                 enumerated: _,
+                checked
             } => {
                 // TODO enumerated
                 let mut s = "\t".repeat(*level as usize);
                 s.push_str("- ");
+                if let Some(checked) = checked {
+                    s.push_str(if *checked { "[x]" }  else { "[ ]" });
+                }
                 s.push_str(text.0);
                 s
             }
@@ -75,12 +85,12 @@ impl MarkdownElement<'_> {
                 // s
             }
             Self::Paragraph(text) => text.0.to_owned(),
-            Self::Quote(text) => {
-                format!("> {text}", text = text.0)
-            }
+            Self::Quote(text) => text.inner.to_owned(),
             Self::Frontmatter(source) => {
                 format!("---\n{source}---")
             }
+            #[cfg(feature = "html")]
+            Self::HTMLElement { element: _, source } => source.to_string(),
             Self::Empty => String::new(),
             item => format!("TODO {item:?}"),
         }
@@ -93,23 +103,24 @@ impl MarkdownElement<'_> {
             Some(text.0)
         } else if let MarkdownElement::Quote(text) = self {
             // TODO these can be sometimes made up of elements
-            Some(text.0)
+            Some(text.inner)
         } else {
             None
         }
     }
 
     #[must_use]
-    pub fn parts_like(&self) -> Option<RawText> {
+    pub fn parts_like(&self) -> Option<RawText<'a>> {
         if let MarkdownElement::Heading { text, .. }
         | MarkdownElement::Paragraph(text)
         | MarkdownElement::ListItem { text, .. } = self
         {
             Some(*text)
-        } else if let MarkdownElement::Quote(text) = self {
-            // TODO these can be sometimes made up of elements
-            Some(RawText(text.0))
         } else {
+            // else if let MarkdownElement::Quote(text) = self {
+            //     // TODO these can be sometimes made up of elements
+            //     Some(RawText(text.0))
+            // }
             None
         }
     }
@@ -127,19 +138,21 @@ impl MarkdownElement<'_> {
                 level,
                 text: _,
                 enumerated,
+                checked
             } => {
-                format!("ListItem {{ level: {level}, enumerated: {enumerated:?} }}")
+                format!("ListItem {{ level: {level}, enumerated: {enumerated:?}, checked: {checked:?} }}")
             }
             MarkdownElement::Table(_table) => "Table".to_owned(),
             MarkdownElement::CodeBlock { language, code: _ } => format!("CodeBlock ({language})"),
             MarkdownElement::LaTeXBlock { script: _ } => "LaTeXBlock {{ .. }}".to_owned(),
             MarkdownElement::CommandBlock(_) => "CommandBlock".to_owned(),
             MarkdownElement::CommentBlock(_) => "CommentBlock".to_owned(),
-            MarkdownElement::HTMLElement(_) => "HTMLElement".to_owned(),
             MarkdownElement::Frontmatter(_) => "Frontmatter".to_owned(),
             MarkdownElement::HorizontalRule => "HorizontalRule".to_owned(),
             MarkdownElement::Footnote => "Footnote".to_owned(),
             MarkdownElement::Empty => "Empty".to_owned(),
+            #[cfg(feature = "html")]
+            Self::HTMLElement { .. } => "HTMLElement".to_owned(),
         }
     }
 }
@@ -151,13 +164,18 @@ pub struct RawText<'a>(pub &'a str);
 impl<'a> RawText<'a> {
     #[must_use]
     pub fn parts(&self) -> PartsIterator<'a> {
-        PartsIterator::new(self.0)
+        PartsIterator::new(self.0, false)
+    }
+
+    #[must_use]
+    pub fn parts_whitespace(&self) -> PartsIterator<'a> {
+        PartsIterator::new(self.0, true)
     }
 
     #[must_use]
     pub fn no_decoration(&self) -> String {
         let mut s = String::new();
-        for part in PartsIterator::new(self.0) {
+        for part in PartsIterator::new(self.0, false) {
             s.push_str(part.no_decoration());
         }
         s
@@ -232,29 +250,48 @@ impl<'a> MarkdownTextElement<'a> {
 
 #[derive(Default, Copy, Clone)]
 pub struct ParseOptions {
+    /// For formatting preservation
     pub include_new_lines: bool,
-    /// Also allows for `![INFO]` syntax
-    pub options_and_markdown_in_quotes: bool,
+    /// Avoid
     pub allow_asterisk_and_plus_as_list_prefixes: bool,
+    /// Avoid
+    pub heading_underscores: bool,
 }
+
+#[derive(Debug)]
+pub enum MarkdownParseError<T> {
+    FromCallback(T),
+}
+
+impl<T: std::fmt::Debug> std::fmt::Display for MarkdownParseError<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        std::fmt::Debug::fmt(self, f)
+    }
+}
+
+impl<T: std::fmt::Debug + std::fmt::Display> std::error::Error for MarkdownParseError<T> {}
 
 /// # Errors
 /// errors for unclosed blocks
-pub fn parse<'a>(on: &'a str, cb: impl FnMut(MarkdownElement<'a>)) -> Result<(), ()> {
-    parse_with_options(on, &ParseOptions::default(), cb)
+pub fn parse<'a, T>(
+    on: &'a str,
+    cb: impl FnMut(MarkdownElement<'a>) -> Result<(), T>,
+) -> Result<(), MarkdownParseError<T>> {
+    parse_with_options(on, ParseOptions::default(), 0, cb)
 }
 
 /// Parse source using callback
 /// # Errors
 /// errors for unclosed blocks
 #[allow(clippy::result_unit_err, clippy::too_many_lines)]
-pub fn parse_with_options<'a>(
+pub fn parse_with_options<'a, T>(
     on: &'a str,
-    options: &ParseOptions,
-    mut cb: impl FnMut(MarkdownElement<'a>),
-) -> Result<(), ()> {
+    options: ParseOptions,
+    quote_depth: u8,
+    mut cb: impl FnMut(MarkdownElement<'a>) -> Result<(), T>,
+) -> Result<(), MarkdownParseError<T>> {
     #[allow(clippy::needless_lifetimes)]
-    fn classify_line<'a>(item: &'a str, options: &ParseOptions) -> MarkdownElement<'a> {
+    fn classify_line<'a>(item: &'a str, options: ParseOptions) -> MarkdownElement<'a> {
         let trimmed = item.trim();
 
         let list_prefixes: &[char] = if options.allow_asterisk_and_plus_as_list_prefixes {
@@ -267,8 +304,11 @@ pub fn parse_with_options<'a>(
             MarkdownElement::Empty
         } else if let "---" = trimmed {
             MarkdownElement::HorizontalRule
-        } else if let Some(item) = trimmed.strip_prefix('>') {
-            MarkdownElement::Quote(RawText(item))
+        } else if trimmed.starts_with('>') {
+            MarkdownElement::Quote(QuoteBlock {
+                alert: None,
+                inner: trimmed,
+            })
         } else if trimmed.starts_with('#') {
             let level = trimmed.chars().take_while(|c| *c == '#').count();
             if trimmed[level..].starts_with(char::is_whitespace) {
@@ -283,10 +323,19 @@ pub fn parse_with_options<'a>(
         } else if let Some(trimmed) = trimmed.trim_start().strip_prefix(list_prefixes) {
             // TODO one or the other
             let level = item.chars().take_while(|c| *c == '\t' || *c == ' ').count();
+            let (checked, trimmed) = if let Some(left) = trimmed.trim_start().strip_prefix("[x]") {
+                (Some(true), left)
+            } else if let Some(left) = trimmed.trim_start().strip_prefix("[ ]") {
+                (Some(false), left)
+            } else {
+                (None, trimmed.trim())
+            };
+
             MarkdownElement::ListItem {
                 level: level.try_into().expect("deep list item"),
                 text: RawText(trimmed),
                 enumerated: false,
+                checked
             }
         } else if let Some(trimmed) = strip_number_prefix(trimmed) {
             let level = item.chars().take_while(|c| *c == '\t' || *c == ' ').count();
@@ -295,17 +344,20 @@ pub fn parse_with_options<'a>(
                 level: level.try_into().expect("deep list item"),
                 text: RawText(trimmed.trim()),
                 enumerated: true,
+                checked: None
             }
         } else {
             MarkdownElement::Paragraph(RawText(trimmed))
         }
     }
 
-    let mut since_new_line = 0;
-    let mut start = 0;
+    // TODO explain difference between upto last_line and end...
+    let mut upto = 0;
+    let mut last_line = 0;
 
     // Some => in_code
-    let mut current_code_language = None;
+    // first argument holds the end
+    let mut current_code_language: Option<(&str, &str)> = None;
 
     let mut current_command_and_arguments: Option<(&str, &str)> = None;
 
@@ -313,168 +365,237 @@ pub fn parse_with_options<'a>(
     let mut in_table = false;
     let mut in_latex_block = false;
     let mut in_markdown_comment = false;
-    // For special syntax
-    let mut quote_command: Option<&str> = None;
+    let mut in_command_header = false;
+    // Some => in_quote
+    let mut quote_and_alert: Option<&str> = None;
 
-    for (idx, chr) in on.char_indices() {
-        if let '\n' = chr {
-            let line = &on[since_new_line..idx];
+    let mut char_indices = on.char_indices().chain([(on.len(), '\n')]);
 
-            if current_code_language.is_some() {
-                if let "```" = line.trim() {
-                    cb(MarkdownElement::CodeBlock {
-                        language: current_code_language.take().unwrap(),
-                        code: &on[start..since_new_line],
-                    });
-                    start = idx + 1;
+    while let Some((idx, chr)) = char_indices.next() {
+        if chr == '\n' {
+            let mut line = &on[last_line..idx];
+            for _ in 0..quote_depth {
+                // TODO
+                line = line.strip_prefix('>').unwrap_or(line);
+            }
+            let end = idx;
+            
+            if quote_and_alert.is_some() {
+                if line.starts_with("> ") {
+                    last_line = idx + '\n'.len_utf8();
+                    continue;
                 }
-                since_new_line = idx + 1;
-                continue;
+                let raw = &on[upto..end];
+                let quote_block = QuoteBlock {
+                    alert: quote_and_alert.take(),
+                    inner: raw,
+                };
+                cb(MarkdownElement::Quote(quote_block))
+                    .map_err(MarkdownParseError::FromCallback)?;
+                upto = last_line;
             }
 
-            if let Some((current_command, arguments)) = current_command_and_arguments {
+            if let Some((to_match, _)) = current_code_language {
+                if line.trim().strip_prefix("```").is_some_and(|rest| rest == to_match) {
+                    // Important that take is done to reset option
+                    let current_code_language = current_code_language.take().unwrap().1;
+                    cb(MarkdownElement::CodeBlock {
+                        language: current_code_language,
+                        code: &on[upto..last_line],
+                    })
+                    .map_err(MarkdownParseError::FromCallback)?;
+                    upto = last_line;
+                }
+            } else if let Some((current_command, arguments)) = current_command_and_arguments {
                 if let Some(command_line) = strip_surrounds(line, "{%", "%}") {
-                    if command_line
+                    let is_command = command_line
                         .trim()
                         .strip_prefix('/')
-                        .is_some_and(|command| current_command == command)
-                    {
+                        .is_some_and(|command| current_command == command);
+
+                    if is_command {
                         cb(MarkdownElement::CommandBlock(CommandBlock {
                             name: current_command,
                             arguments,
-                            inner: RawMarkdown(&on[start..since_new_line]),
-                        }));
+                            inner: RawMarkdown(&on[upto..last_line]),
+                        }))
+                        .map_err(MarkdownParseError::FromCallback)?;
                         current_command_and_arguments = None;
-                        start = idx + 1;
+                        upto = last_line;
                     }
                 }
-                since_new_line = idx + 1;
-                continue;
-            }
-
-            if in_latex_block {
+            } else if in_latex_block {
                 if let "$$" = line.trim() {
                     cb(MarkdownElement::LaTeXBlock {
-                        script: on[start..since_new_line].trim(),
-                    });
+                        script: on[upto..last_line].trim(),
+                    })
+                    .map_err(MarkdownParseError::FromCallback)?;
                     in_latex_block = false;
-                    start = idx + 1;
+                    upto = last_line;
                 }
-                since_new_line = idx + 1;
-                continue;
-            }
-
-            if in_markdown_comment {
-                if line.trim().ends_with("%%") {
-                    cb(MarkdownElement::CommentBlock(
-                        on[start..since_new_line].trim(),
-                    ));
+            } else if in_markdown_comment {
+                if line.trim_end().ends_with("%%") {
+                    cb(MarkdownElement::CommentBlock(on[upto..last_line].trim()))
+                        .map_err(MarkdownParseError::FromCallback)?;
                     in_markdown_comment = false;
-                    start = idx + 1;
+                    upto = last_line;
                 }
-                since_new_line = idx + 1;
-                continue;
-            }
-
-            if in_table {
-                if !line.ends_with('|') {
-                    cb(MarkdownElement::Table(Table(
-                        &on[start..since_new_line].trim(),
-                    )));
+            } else if in_command_header {
+                if let Some(command_line) = line.strip_prefix("%}") {
+                    if let Some(command_line) = command_line.strip_suffix('/') {
+                        let (current_command, arguments) =
+                            command_line.split_once(' ').unwrap_or((command_line, ""));
+                        cb(MarkdownElement::CommandBlock(CommandBlock {
+                            name: current_command,
+                            arguments,
+                            inner: RawMarkdown(""),
+                        }))
+                        .map_err(MarkdownParseError::FromCallback)?;
+                        upto = last_line;
+                    } else {
+                        current_command_and_arguments =
+                            Some(command_line.split_once(' ').unwrap_or((command_line, "")));
+                    }
+                }
+            } else if in_table {
+                if !line.trim_end().ends_with('|') {
+                    cb(MarkdownElement::Table(Table(on[upto..last_line].trim())))
+                        .map_err(MarkdownParseError::FromCallback)?;
                     in_table = false;
-                    start = idx + 1;
                 }
-            }
-
-            if let Some(arguments) = quote_command {
-                if let Some(content) = line.strip_prefix("> ") {
-                    let command_block = CommandBlock {
-                        name: "quote",
-                        arguments,
-                        inner: RawMarkdown(content),
-                    };
-                    cb(MarkdownElement::CommandBlock(command_block));
-                    start = idx + 1;
-                    continue;
-                } else {
-                    quote_command = None;
-                }
-            }
-
-            let is_horizontal_rule = "---" == line.trim();
-
-            if in_frontmatter {
+            } else if in_frontmatter {
+                let is_horizontal_rule = "---" == line.trim();
                 if is_horizontal_rule {
-                    cb(MarkdownElement::Frontmatter(&on[start..since_new_line]));
+                    cb(MarkdownElement::Frontmatter(&on[upto..last_line]))
+                        .map_err(MarkdownParseError::FromCallback)?;
                     in_frontmatter = false;
+                    upto = end;
                 }
-                since_new_line = idx + 1;
-                continue;
-            }
-
-            since_new_line = idx + 1;
-
-            if let Some(rest) = line.trim().strip_prefix("```") {
-                // TODO other motifiers here
-                let language = rest.trim_end();
-                current_code_language = Some(language);
+            } else if let Some(rest) = line.trim().strip_prefix("```") {
+                let matching = rest.chars().filter(|c| *c == '`').count();
+                // For nesting
+                let backticks = &rest[..matching];
+                let trailing = &rest[matching..];
+                // TODO other motifiers here?
+                current_code_language = Some((backticks, trailing));
+                upto = idx + '\n'.len_utf8();
             } else if let "$$" = line.trim() {
                 in_latex_block = true;
+                upto = idx + '\n'.len_utf8();
             } else if line.starts_with('|') {
                 in_table = true;
-                continue;
-            } else if let (true, Some(inner)) = (
-                options.options_and_markdown_in_quotes,
-                line.strip_prefix('>'),
-            ) {
-                let command = strip_surrounds(inner, "![", "]").unwrap_or_default();
-                quote_command = Some(command);
+                upto = last_line;
+            } else if let Some(inner) = line.strip_prefix('>') {
+                let command = strip_surrounds(inner, "[!", "]");
+                if command.is_some() {
+                    upto = end;
+                }
+                quote_and_alert = Some(command.unwrap_or_default());
             } else if let Some(line) = line.trim_start().strip_prefix("%%") {
                 if let Some(out) = line.trim_end().strip_suffix("%%") {
-                    cb(MarkdownElement::CommentBlock(out.trim()));
+                    let element = MarkdownElement::CommentBlock(out.trim());
+                    cb(element).map_err(MarkdownParseError::FromCallback)?;
                 } else {
                     in_markdown_comment = true;
+                    upto = idx + '\n'.len_utf8();
                 }
-            } else if start == 0 && is_horizontal_rule {
+            } else if upto == 0 && "---" == line.trim() {
                 in_frontmatter = true;
-            } else if let Some(command_line) = strip_surrounds(line, "{%", "%}") {
-                current_command_and_arguments =
-                    Some(command_line.split_once(' ').unwrap_or((command_line, "")));
+                upto = idx + '\n'.len_utf8();
+            } else if let Some(line) = line.strip_prefix("{%") {
+                if let Some(command_line) = line.strip_suffix("/%}").map(str::trim) {
+                    let (current_command, arguments) =
+                        command_line.split_once(' ').unwrap_or((command_line, ""));
+                    let element = MarkdownElement::CommandBlock(CommandBlock {
+                        name: current_command,
+                        arguments,
+                        inner: RawMarkdown(""),
+                    });
+                    cb(element).map_err(MarkdownParseError::FromCallback)?;
+                    upto = last_line;
+                    continue;
+                } else if let Some(command_line) = line.strip_prefix("%}") {
+                    current_command_and_arguments =
+                        Some(command_line.split_once(' ').unwrap_or((command_line, "")));
+                } else {
+                    in_command_header = true;
+                }
             } else {
+                // TODO maybe a little more
+                #[cfg(feature = "html")]
+                if line.starts_with("<") {
+                    use lightml::Element;
+                    let current = &on[upto..];
+
+                    let result = Element::from_string(current);
+                    let (element, consumed) = match result {
+                        Ok(result) => result,
+                        Err(err) => {
+                            panic!("{err:?}");
+                        }
+                    };
+                    let source = &current[..consumed as usize];
+                    // TODO eww
+                    {
+                        (0..source.chars().count()).for_each(|_| {
+                            char_indices.next();
+                        });
+                    }
+                    cb(MarkdownElement::HTMLElement { element, source })
+                        .map_err(MarkdownParseError::FromCallback)?;
+                    upto += consumed as usize;
+                    continue;
+                }
+
+                // todo if options.underscore_headings && source[idx..].starts_with("---") {
+                //     to header
+                // }
+
                 let result = classify_line(line, options);
                 let to_add = !matches!(
-                    (options.include_new_lines, result),
+                    (options.include_new_lines, &result),
                     (false, MarkdownElement::Empty)
                 );
                 if to_add {
-                    cb(result);
+                    cb(result).map_err(MarkdownParseError::FromCallback)?;
                 }
+                upto = idx + '\n'.len_utf8();
             }
 
-            start = since_new_line;
+            last_line = idx + '\n'.len_utf8();
         }
     }
 
     if current_code_language.is_some() {
-        eprintln!("TODO error {current_code_language:?}");
+        eprintln!("TODO error current_code_language={current_code_language:?}");
         // todo!("error here");
     } else if in_latex_block {
         eprintln!("TODO unclosed latex block");
     }
 
-    if in_table {
-        cb(MarkdownElement::Table(Table(&on[start..since_new_line])));
-    } else {
-        let line = &on[start..];
-        let result = classify_line(line, options);
-        let to_add = !matches!(
-            (options.include_new_lines, result),
-            (false, MarkdownElement::Empty)
-        );
-        if to_add {
-            cb(result);
-        }
-    }
+    // let line = on[upto..].trim_start();
+    // if in_table {
+    //     cb(MarkdownElement::Table(Table(line))).map_err(MarkdownParseError::FromCallback)?;
+    // } else if let Some(content) = line.strip_prefix("> ") {
+    //     let command_block = CommandBlock {
+    //         name: "quote",
+    //         arguments: quote_and_alert.unwrap_or_default(),
+    //         inner: RawMarkdown(content),
+    //     };
+    //     cb(MarkdownElement::CommandBlock(command_block))
+    //         .map_err(MarkdownParseError::FromCallback)?;
+    // } else if let (Some(current_code_language), "```") = (current_code_language, line.trim()) {
+
+    // } else {
+    //     let result = classify_line(line, options);
+    //     let to_add = !matches!(
+    //         (options.include_new_lines, &result),
+    //         (false, MarkdownElement::Empty)
+    //     );
+    //     if to_add {
+    //         cb(result).map_err(MarkdownParseError::FromCallback)?;
+    //     }
+    // }
 
     Ok(())
 }
@@ -484,6 +605,9 @@ pub fn parse_with_options<'a>(
 #[allow(clippy::struct_excessive_bools)]
 pub struct PartsIterator<'a> {
     on: &'a str,
+    // Ignores empty strings, trims text blocks
+    preserve_whitespace: bool,
+    // Internal state
     last: usize,
     in_tag: bool,
     pub in_bold: bool,
@@ -500,9 +624,10 @@ pub struct PartsIterator<'a> {
 
 impl<'a> PartsIterator<'a> {
     #[must_use]
-    pub fn new(on: &'a str) -> Self {
+    pub fn new(on: &'a str, preserve_whitespace: bool) -> Self {
         Self {
             on,
+            preserve_whitespace,
             last: 0,
             in_tag: false,
             in_bold: false,
@@ -596,7 +721,7 @@ impl<'a> Iterator for PartsIterator<'a> {
                         if idx == 0 {
                             self.in_internal_link = true;
                             // Reset
-                            // range = &self.on[idx..];
+                            // range = &&self.on[idx..];
                         } else {
                             bracket_depth += 1;
                         }
@@ -633,19 +758,22 @@ impl<'a> Iterator for PartsIterator<'a> {
                     return Some(MarkdownTextElement::Expression(&range[..idx]));
                 }
                 // TODO escaped stuff etc
-                if let (true, '>') = (self.in_chevron_link, chr) {
-                    self.last += idx + 1;
-                    self.in_chevron_link = false;
-                    let inner = &range[..idx];
-                    return Some(MarkdownTextElement::Link {
-                        // presentation as same as link
-                        on: RawText(inner),
-                        to: inner,
-                    });
+                if self.in_chevron_link {
+                    if let '>' = chr {
+                        self.last += idx + 1;
+                        self.in_chevron_link = false;
+                        let inner = &range[..idx];
+                        return Some(MarkdownTextElement::Link {
+                            // presentation as same as link
+                            on: RawText(inner),
+                            to: inner,
+                        });
+                    }
+                    continue;
                 }
 
                 if self.in_tag && chr.is_whitespace() {
-                    self.last += idx + 1;
+                    self.last += idx;
                     self.in_tag = false;
                     return Some(MarkdownTextElement::Tag(&range[..idx]));
                 }
@@ -653,6 +781,11 @@ impl<'a> Iterator for PartsIterator<'a> {
                 macro_rules! yield_current {
                     () => {{
                         let item = &range[..idx];
+                        let item = if self.preserve_whitespace {
+                            item
+                        } else {
+                            item.trim()
+                        };
                         if !item.is_empty() {
                             return Some(MarkdownTextElement::Plain(item));
                         }
@@ -693,7 +826,7 @@ impl<'a> Iterator for PartsIterator<'a> {
                         self.in_tag = true;
                         yield_current!();
                     }
-                    '<' if range[idx..]
+                    '<' if range[(idx + 1)..]
                         .chars()
                         .next()
                         .is_some_and(char::is_alphanumeric) =>
@@ -737,11 +870,19 @@ impl<'a> Iterator for PartsIterator<'a> {
             }
 
             self.last = self.on.len();
+            let range = if self.preserve_whitespace {
+                range
+            } else {
+                range.trim()
+            };
+
             if range.is_empty() {
                 None
             } else if let Some(_link_text_end) = link_text_end {
                 eprintln!("Link text end!!");
                 None
+            } else if self.in_tag {
+                Some(MarkdownTextElement::Tag(range))
             } else {
                 // TODO errors left overs. But also others such as tags etc
                 Some(MarkdownTextElement::Plain(range))
@@ -784,6 +925,7 @@ impl<'a> TableRow<'a> {
         inner.split('|').map(RawText)
     }
 }
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct CommandBlock<'a> {
     pub name: &'a str,
@@ -797,24 +939,24 @@ impl<'a> CommandBlock<'a> {
     pub fn arguments(&self) -> Vec<(&'a str, &'a str)> {
         let mut arguments = Vec::new();
         let mut key: Option<&str> = None;
-        let mut start = 0;
+        let mut upto = 0;
         let mut in_string = false;
 
         for (idx, chr) in self.arguments.char_indices() {
             if let Some(current_key) = key {
-                let value = self.arguments[start..idx].trim();
+                let value = self.arguments[upto..idx].trim();
                 if let (' ', false, false) = (chr, in_string, value.is_empty()) {
                     arguments.push((current_key, value));
-                    start = idx;
+                    upto = idx;
                     key = None;
                 } else if let '"' = chr {
                     in_string = !in_string;
                 }
             } else {
                 if let '=' = chr {
-                    let key_acc = &self.arguments[start..idx];
+                    let key_acc = &self.arguments[upto..idx];
                     key = Some(key_acc.trim());
-                    start = idx + 1;
+                    upto = idx + 1;
                 }
             }
         }
@@ -823,7 +965,7 @@ impl<'a> CommandBlock<'a> {
             if in_string {
                 eprintln!("missing '\"'");
             }
-            let value = self.arguments[start..].trim();
+            let value = self.arguments[upto..].trim();
             arguments.push((current_key, value));
         }
 
@@ -833,6 +975,13 @@ impl<'a> CommandBlock<'a> {
 
         arguments
     }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct QuoteBlock<'a> {
+    /// [See GitHub markdown alerts](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax#alerts). Note this allows any alerts. It does not check from a defined list
+    pub alert: Option<&'a str>,
+    pub inner: &'a str,
 }
 
 fn strip_number_prefix(on: &str) -> Option<&str> {

@@ -1,4 +1,6 @@
-use super::{parse, MarkdownElement, RawText};
+use super::{
+    parse, parse_with_options, MarkdownElement, MarkdownParseError, ParseOptions, RawText,
+};
 
 #[cfg(target_family = "wasm")]
 use wasm_bindgen::prelude::*;
@@ -6,12 +8,13 @@ use wasm_bindgen::prelude::*;
 /// # Errors
 /// errors from markdown parsing
 #[allow(clippy::result_unit_err)]
-pub fn parse_with_header_information<'a>(
+pub fn parse_with_header_information<'a, T>(
     on: &'a str,
-    mut cb: impl for<'b> FnMut(&'b Vec<RawText<'a>>, MarkdownElement<'a>),
-) -> Result<(), ()> {
+    options: ParseOptions,
+    mut cb: impl for<'b> FnMut(&'b Vec<RawText<'a>>, MarkdownElement<'a>) -> Result<(), T>,
+) -> Result<(), MarkdownParseError<T>> {
     let mut header_chain = Vec::new();
-    parse(on, |element| {
+    parse_with_options(on, options, 0, |element| {
         if let MarkdownElement::Heading { level, text } = element {
             let raw_level = level as usize - 1;
             if header_chain.len() < raw_level {
@@ -19,10 +22,11 @@ pub fn parse_with_header_information<'a>(
             } else {
                 let _ = header_chain.drain(raw_level..);
             }
-            cb(&header_chain, element);
+            let result = cb(&header_chain, element);
             header_chain.push(text);
+            result
         } else {
-            cb(&header_chain, element);
+            cb(&header_chain, element)
         }
     })
 }
@@ -37,7 +41,7 @@ pub fn parse_sections<'a>(
     let mut header_chain = Vec::new();
     let mut inner = Vec::new();
 
-    let result = parse(on, |element| {
+    let result = parse::<()>(on, |element| {
         if let MarkdownElement::Heading { level, text } = element {
             // Run when next one begins
             {
@@ -54,14 +58,15 @@ pub fn parse_sections<'a>(
             header_chain.push(text);
         } else {
             inner.push(element);
-        }
+        };
+        Ok(())
     });
 
     if result.is_ok() {
         cb(&header_chain, &inner);
     }
 
-    result
+    result.map_err(|_err| ())
 }
 
 #[derive(Default, Clone)]
@@ -80,7 +85,10 @@ pub struct CodeBlock {
     items: Vec<String>,
 }
 
-pub fn parse_code_blocks(on: &str, mut cb: impl FnMut(CodeBlock)) -> Result<(), ()> {
+pub fn parse_code_blocks(
+    on: &str,
+    mut cb: impl FnMut(CodeBlock),
+) -> Result<(), MarkdownParseError<()>> {
     let mut header_chain: Vec<RawText> = Vec::new();
     let mut current_block = CodeBlock::default();
     // let mut blocks = on.split("\n").collect::<Vec<_>>();
@@ -106,10 +114,12 @@ pub fn parse_code_blocks(on: &str, mut cb: impl FnMut(CodeBlock)) -> Result<(), 
         } else if let MarkdownElement::Paragraph(content) = element {
             current_block.information.push_str(content.0);
         } else if let MarkdownElement::Quote(content) = element {
-            current_block.information.push_str(content.0);
+            current_block.information.push_str(content.inner);
         } else if let MarkdownElement::ListItem { text, .. } = element {
             current_block.items.push(text.0.to_owned());
         }
+
+        Ok(())
     });
 
     if !current_block.code.is_empty() {
@@ -186,8 +196,16 @@ impl Slide {
     #[must_use]
     #[cfg(not(target_family = "wasm"))]
     pub fn to_html(&self, emitter: &mut impl crate::extras::emit::FeatureEmitter) -> String {
+        // TODO
+        let options = crate::ParseOptions::default();
         let mut bytes: Vec<u8> = Vec::new();
-        let _ = crate::extras::emit::markdown_to_html(&self.markdown_content, &mut bytes, emitter);
+        let _ = crate::extras::emit::markdown_to_html(
+            &self.markdown_content,
+            &mut bytes,
+            emitter,
+            options,
+            0,
+        );
         match String::from_utf8(bytes) {
             Ok(result) => result,
             Err(_) => String::from("Non Utf8 output or markdown parser error"),
@@ -215,7 +233,7 @@ pub fn extract_slides(on: &str) -> Vec<Slide> {
             None
         };
         if let Some(level) = heading_level {
-            if level <= 3 {
+            if level <= 4 {
                 let mut slide = std::mem::take(&mut current_slide);
 
                 let end = line.as_ptr() as usize - on.as_ptr() as usize;
@@ -230,7 +248,7 @@ pub fn extract_slides(on: &str) -> Vec<Slide> {
                 // TODO sub_ptr https://github.com/rust-lang/rust/issues/95892
                 start = (line.as_ptr() as usize - on.as_ptr() as usize) + line.len();
 
-                let raw_level = level as usize - 1;
+                let raw_level = level - 1;
                 if header_chain.len() < raw_level {
                     header_chain.extend((header_chain.len()..raw_level).map(|_| RawText("")));
                 } else {
@@ -277,7 +295,7 @@ pub mod lexical_analysis {
             word
         }
 
-        let _result = parse(on, |element| {
+        let _result = parse::<()>(on, |element| {
             if let Some(text) = element.inner_paragraph_raw() {
                 analyser.paragraph(text);
             }
@@ -298,6 +316,105 @@ pub mod lexical_analysis {
             } else {
                 // Might be missing here
             }
+
+            Ok(())
         });
+    }
+}
+
+pub mod extraction {
+    use crate::{parse, MarkdownElement, MarkdownParseError, MarkdownTextElement};
+
+    #[derive(Clone, Copy)]
+    pub enum Stop<'a> {
+        FirstSection,
+        MatchingLevel,
+        AtHeader(&'a str),
+    }
+
+    fn find_first_new_line_offset(on: &str) -> usize {
+        let mut chars = on.char_indices();
+        while let Some((idx, chr)) = chars.next_back() {
+            if let '\n' = chr {
+                return on.len() - idx;
+            }
+        }
+        on.len()
+    }
+
+    pub fn between_headers<'a>(
+        on: &'a str,
+        from_heading: Option<&str>,
+        to: Option<Stop>,
+    ) -> &'a str {
+        if from_heading.is_none() && to.is_none() {
+            return on;
+        }
+
+        let mut start: Option<usize> = from_heading.is_none().then_some(0);
+        let mut matching_level = 0;
+
+        let end = parse::<usize>(on, |element| {
+            if let MarkdownElement::Heading { level, text } = element {
+                if start.is_some() {
+                    let text_offset = text.0.as_ptr() as usize;
+                    let diff = text_offset - on.as_ptr() as usize;
+                    let to_new_line = find_first_new_line_offset(&on[..diff]);
+                    let end = diff - to_new_line;
+                    match to.unwrap() {
+                        Stop::FirstSection => {
+                            return Err(end);
+                        }
+                        Stop::MatchingLevel => {
+                            if level <= matching_level {
+                                return Err(end);
+                            }
+                        }
+                        Stop::AtHeader(header_end) => {
+                            if text.0.eq_ignore_ascii_case(header_end) {
+                                return Err(end);
+                            }
+                        }
+                    }
+                } else {
+                    if text.0.eq_ignore_ascii_case(from_heading.unwrap()) {
+                        let text_offset = text.0.as_ptr() as usize;
+                        let diff = text_offset - on.as_ptr() as usize;
+                        let to_new_line = find_first_new_line_offset(&on[..diff]);
+                        start = Some(diff - to_new_line);
+                        matching_level = level;
+                        if to.is_none() {
+                            return Err(on.len());
+                        }
+                    }
+                }
+            }
+            Ok(())
+        });
+
+        if let Some(start) = start {
+            if let Err(MarkdownParseError::FromCallback(end)) = end {
+                &on[start..end]
+            } else {
+                &on[start..]
+            }
+        } else {
+            ""
+        }
+    }
+
+    pub fn links<'a>(
+        on: &'a str,
+        cb: impl Fn(&'a str, &'a str)
+    ) {
+        parse::<usize>(on, |element| {
+            if let MarkdownElement::ListItem { text, .. } = element {
+                let parts = text.parts().collect::<Vec<_>>();
+                if let &[MarkdownTextElement::Link { on, to }] = parts.as_slice() {
+                    cb(on.0, to);
+                }
+            }
+            Ok(())
+        }).unwrap();
     }
 }

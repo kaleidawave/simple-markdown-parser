@@ -1,6 +1,6 @@
 ### simple-markdown-parser
 
-![LOC badge](https://kaleidawave-projectinformation.web.val.run/project/simple-markdown-parser/badge)
+![LOC badge](https://project-information-kaleidawave.val.run/project/simple-markdown-parser/badge)
 [![crates.io badge](https://img.shields.io/crates/v/simple-markdown-parser?style=flat-square)](https://crates.io/crates/simple-markdown-parser)
 [![docs.rs badge](https://img.shields.io/docsrs/simple-markdown-parser?style=flat-square)](https://docs.rs/simple-markdown-parser/latest)
 
@@ -19,6 +19,7 @@ TODO
 - Escaped code marks `code`
 - Titles in links
 - Highlight
+- Code block escapes: https://stackoverflow.com/a/71150969/10048799
 
 Additionally
 - CLI via example

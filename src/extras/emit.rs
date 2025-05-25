@@ -1,4 +1,6 @@
-use crate::{MarkdownElement, MarkdownTextElement, RawText};
+// TODO unwrap
+
+use crate::{MarkdownElement, MarkdownParseError, MarkdownTextElement, ParseOptions, RawText};
 use std::io::Write;
 
 #[cfg(target_family = "wasm")]
@@ -9,9 +11,11 @@ use wasm_bindgen::prelude::*;
 pub fn markdown_to_html_string(source: &str, emitter: Option<FeatureEmitterWASM>) -> String {
     std::panic::set_hook(Box::new(console_error_panic_hook::hook));
     let mut bytes: Vec<u8> = Vec::new();
+    // TODO as parameter
+    let options = ParseOptions::default();
     let _ = match emitter {
-        Some(mut emitter) => markdown_to_html(source, &mut bytes, &mut emitter),
-        None => markdown_to_html(source, &mut bytes, &mut BlankFeatureEmitter),
+        Some(mut emitter) => markdown_to_html(source, &mut bytes, &mut emitter, options),
+        None => markdown_to_html(source, &mut bytes, &mut BlankFeatureEmitter, options),
     };
     match String::from_utf8(bytes) {
         Ok(result) => result,
@@ -22,11 +26,13 @@ pub fn markdown_to_html_string(source: &str, emitter: Option<FeatureEmitterWASM>
 pub fn markdown_to_html(
     source: &str,
     out: &mut impl Write,
-    emitter: &mut impl FeatureEmitter,
-) -> Result<(), ()> {
+    emitter: &impl FeatureEmitter,
+    options: ParseOptions,
+    quote_depth: u8,
+) -> Result<(), MarkdownParseError<()>> {
     let mut last_was_list_item: Option<&'static str> = None;
-    crate::parse(source, |item| {
-        let is_list_item = if let MarkdownElement::ListItem { enumerated, .. } = item {
+    crate::parse_with_options::<()>(source, options, quote_depth, |item| {
+        let is_list_item = if let MarkdownElement::ListItem { enumerated, checked: _, .. } = item {
             Some(if enumerated { "ol" } else { "ul" })
         } else {
             None
@@ -36,8 +42,10 @@ pub fn markdown_to_html(
         } else if let (None, Some(tag)) = (is_list_item, last_was_list_item) {
             writeln!(out, "</{tag}>").unwrap();
         }
-        element_to_html(out, emitter, item).unwrap();
+        element_to_html(out, emitter, options, quote_depth, item).unwrap();
         last_was_list_item = is_list_item;
+
+        Ok(())
     })
 }
 
@@ -46,7 +54,14 @@ pub trait FeatureEmitter {
 
     fn latex(&self, code: &str) -> String;
 
-    fn command(&self, name: &str, args: Vec<(&str, &str)>, inner: &str) -> String;
+    fn command(
+        &self,
+        name: &str,
+        args: Vec<(&str, &str)>,
+        inner: &str,
+        options: ParseOptions,
+        to: &mut impl Write,
+    );
 
     fn interpolation(&self, expression: &str) -> String;
 }
@@ -56,6 +71,7 @@ pub struct BlankFeatureEmitter;
 
 impl FeatureEmitter for BlankFeatureEmitter {
     fn code_block(&self, _language: &str, code: &str) -> String {
+        // TODO this is fine
         code.to_owned()
     }
 
@@ -63,7 +79,14 @@ impl FeatureEmitter for BlankFeatureEmitter {
         panic!("`BlankFeatureEmitter` does implement LaTeX HTML generation");
     }
 
-    fn command(&self, _name: &str, _args: Vec<(&str, &str)>, _inner: &str) -> String {
+    fn command(
+        &self,
+        _name: &str,
+        _args: Vec<(&str, &str)>,
+        _inner: &str,
+        _options: ParseOptions,
+        _to: &mut impl Write,
+    ) {
         panic!("`BlankFeatureEmitter` does implement command generation")
     }
 
@@ -140,7 +163,14 @@ impl FeatureEmitter for FeatureEmitterWASM {
         result_to_string(result)
     }
 
-    fn command(&self, name: &str, args: Vec<(&str, &str)>, inner: &str) -> String {
+    fn command(
+        &self,
+        name: &str,
+        args: Vec<(&str, &str)>,
+        inner: &str,
+        _options: ParseOptions,
+        to: &mut impl Write,
+    ) {
         use js_sys::Array;
 
         let args_array = Array::new();
@@ -153,7 +183,7 @@ impl FeatureEmitter for FeatureEmitterWASM {
             &args_array.into(),
             &JsValue::from_str(inner),
         );
-        result_to_string(result)
+        write!(to, "{}", result_to_string(result));
     }
 
     fn interpolation(&self, expression: &str) -> String {
@@ -167,7 +197,9 @@ impl FeatureEmitter for FeatureEmitterWASM {
 #[allow(clippy::match_same_arms)]
 pub fn element_to_html(
     out: &mut impl Write,
-    emitter: &mut impl FeatureEmitter,
+    emitter: &impl FeatureEmitter,
+    options: ParseOptions,
+    quote_depth: u8,
     item: MarkdownElement,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match item {
@@ -177,11 +209,21 @@ pub fn element_to_html(
             inner_to_html(out, emitter, text)?;
             writeln!(out, "</h{level}>")?;
         }
-        MarkdownElement::Quote(_text) => {
-            writeln!(out, "<blockquote>")?;
-            // TODO
-            // inner_to_html(out, emitter, text)?;
-            writeln!(out, "</blockquote>")?;
+        MarkdownElement::Quote(block) => {
+            writeln!(out, "<blockquote")?;
+            if let Some(alert) = block.alert {
+                // TODO
+                write!(
+                    out,
+                    " data-quote-alert=\"{alert}\">",
+                    alert = alert.to_lowercase()
+                )
+                .unwrap();
+            } else {
+                write!(out, ">")?;
+            };
+            markdown_to_html(block.inner, out, emitter, options, quote_depth + 1).unwrap();
+            writeln!(out, "</blockquote")?;
         }
         MarkdownElement::Paragraph(text) => {
             if text.0.starts_with("![") || text.0.starts_with("[![") {
@@ -197,6 +239,7 @@ pub fn element_to_html(
             level: _level,
             text,
             enumerated: _,
+            checked: _
         } => {
             writeln!(out, "<li>")?;
             inner_to_html(out, emitter, text)?;
@@ -231,21 +274,22 @@ pub fn element_to_html(
             writeln!(out, "<pre>{inner}</pre>")?;
         }
         MarkdownElement::LaTeXBlock { script: _ } => {}
-        // TODO how much to do here
-        MarkdownElement::HTMLElement(_) => {}
         // TODO at start?
         MarkdownElement::Frontmatter(inner) => {
-            writeln!(out, "<pre>{inner}</pre>")?;
+            // TODO temp
+            writeln!(out, "<pre class=\"frontmatter\">{inner}</pre>")?;
         }
         MarkdownElement::HorizontalRule => {
             writeln!(out, "<hr>")?;
         }
         MarkdownElement::CommandBlock(command) => {
-            writeln!(
+            emitter.command(
+                command.name,
+                command.arguments(),
+                command.inner.0,
+                options,
                 out,
-                "{result}",
-                result = emitter.command(command.name, command.arguments(), command.inner.0)
-            )?;
+            );
         }
         // MarkdownElement::Media {
         //     alt: _,
@@ -254,6 +298,48 @@ pub fn element_to_html(
         // } => {}
         MarkdownElement::Footnote => {}
         MarkdownElement::CommentBlock(_) | MarkdownElement::Empty => {}
+        #[cfg(feature = "html")]
+        MarkdownElement::HTMLElement { source: _, element } => {
+            fn emit_element(
+                element: &lightml::Element<'_>,
+                out: &mut impl Write,
+                emitter: &impl FeatureEmitter,
+                options: ParseOptions,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                write!(out, "<{tag_name}", tag_name = element.tag_name)?;
+                for lightml::Attribute { key, value } in &element.attributes {
+                    write!(out, " \"{key}\"=\"{value}\"")?;
+                }
+                writeln!(out, ">")?;
+                match element.children {
+                    lightml::ElementChildren::Children(ref children) => {
+                        for child in children {
+                            match child {
+                                lightml::Node::Element(element) => {
+                                    let _ = emit_element(&element, out, emitter, options)?;
+                                }
+                                lightml::Node::TextNode(content) => {
+                                    // Yes it is mapped recursively
+                                    // TODO unwrap
+                                    let _ = markdown_to_html(content, out, emitter, options, 0)
+                                        .unwrap();
+                                }
+                                lightml::Node::Comment(_)
+                                | lightml::Node::MismatchClosingTag(_) => {}
+                            }
+                        }
+                        writeln!(out, "</{tag_name}>", tag_name = element.tag_name)?;
+                    }
+                    lightml::ElementChildren::SelfClosing => {}
+                    lightml::ElementChildren::Literal(ref content) => {
+                        writeln!(out, "{content}\n</{tag_name}>", tag_name = element.tag_name)?;
+                    }
+                }
+                Ok(())
+            }
+
+            let _ = emit_element(&element, out, emitter, options)?;
+        }
     }
 
     Ok(())
@@ -261,7 +347,7 @@ pub fn element_to_html(
 
 pub fn inner_to_html(
     out: &mut impl Write,
-    emitter: &mut impl FeatureEmitter,
+    emitter: &impl FeatureEmitter,
     text: RawText,
 ) -> Result<(), Box<dyn std::error::Error>> {
     for part in text.parts() {
@@ -273,7 +359,7 @@ pub fn inner_to_html(
 #[allow(clippy::match_same_arms)]
 pub fn text_element_to_html(
     out: &mut impl Write,
-    emitter: &mut impl FeatureEmitter,
+    emitter: &impl FeatureEmitter,
     item: MarkdownTextElement,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match item {
@@ -290,7 +376,10 @@ pub fn text_element_to_html(
         MarkdownTextElement::Highlight(content) => write!(out, "{content}")?,
         MarkdownTextElement::Subscript(content) => write!(out, "{content}")?,
         MarkdownTextElement::Superscript(content) => write!(out, "{content}")?,
-        MarkdownTextElement::Tag(content) => write!(out, "{content}")?,
+        MarkdownTextElement::Tag(content) => write!(
+            out,
+            "<span style=\"background-color: red; color: white\">#{content}</span>"
+        )?,
         MarkdownTextElement::Media { alt, source } => {
             // TODO videos?
             write!(out, "<img alt=\"{alt}\" src=\"{source}\">")?;
@@ -307,3 +396,5 @@ pub fn text_element_to_html(
 
     Ok(())
 }
+
+pub mod quote_blocks {}
