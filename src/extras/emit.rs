@@ -58,7 +58,7 @@ pub fn markdown_to_html(
 pub trait FeatureEmitter {
     fn code_block(&self, language: &str, code: &str) -> String;
 
-    fn mathematics(&self, code: &str) -> String;
+    fn mathematics(&self, code: &str, display: bool) -> String;
 
     fn command(
         &self,
@@ -77,12 +77,17 @@ pub struct BlankFeatureEmitter;
 
 impl FeatureEmitter for BlankFeatureEmitter {
     fn code_block(&self, _language: &str, code: &str) -> String {
-        // TODO this is fine
+        // panic!("`BlankFeatureEmitter` does implement code blocks");
         code.to_owned()
     }
 
-    fn mathematics(&self, _code: &str) -> String {
-        panic!("`BlankFeatureEmitter` does implement LaTeX HTML generation");
+    fn mathematics(&self, content: &str, display: bool) -> String {
+        // panic!("`BlankFeatureEmitter` does implement LaTeX HTML generation");
+        if display {
+            format!("$${content}$$")
+        } else {
+            format!("${content}$")
+        }
     }
 
     fn command(
@@ -162,10 +167,12 @@ impl FeatureEmitter for FeatureEmitterWASM {
         result_to_string(result)
     }
 
-    fn mathematics(&self, code: &str) -> String {
-        let result = self
-            .mathematics_callback
-            .call1(&JsValue::NULL, &JsValue::from_str(code));
+    fn mathematics(&self, code: &str, display: bool) -> String {
+        let result = self.mathematics_callback.call1(
+            &JsValue::NULL,
+            &JsValue::from_str(code),
+            &JsValue::from_bool(display),
+        );
         result_to_string(result)
     }
 
@@ -277,9 +284,15 @@ pub fn element_to_html(
         }
         MarkdownElement::CodeBlock(crate::CodeBlock { language, code }) => {
             let inner = emitter.code_block(language, code);
-            writeln!(out, "<pre>{inner}</pre>")?;
+            writeln!(out, "<pre data-language=\"{language}\">{inner}</pre>")?;
         }
-        MarkdownElement::BlockMathematics { script: _ } => {}
+        MarkdownElement::BlockMathematics { script } => {
+            writeln!(
+                out,
+                "<p class=\"mathematics block\">{inner}</p>",
+                inner = emitter.mathematics(script, true)
+            )?;
+        }
         // TODO at start?
         MarkdownElement::Frontmatter(inner) => {
             // TODO temp
@@ -297,7 +310,7 @@ pub fn element_to_html(
                 out,
             );
         }
-        MarkdownElement::Footnote => {}
+        // MarkdownElement::Footnote => {}
         MarkdownElement::CommentBlock(_) | MarkdownElement::Empty => {}
     }
     // #[cfg(feature = "html")]
@@ -404,7 +417,11 @@ pub fn inner_to_html(
             MarkdownPart::InlineCode => {
                 write!(out, "<code>{on}</code>", on = escape_string_content(on))?
             }
-            MarkdownPart::InlineMathematics => write!(out, "{out}", out = emitter.mathematics(on))?,
+            MarkdownPart::InlineMathematics => write!(
+                out,
+                "<span class=\"mathematics inline\">{out}</span>",
+                out = emitter.mathematics(on, false)
+            )?,
             MarkdownPart::Emoji => write!(out, "")?,
             MarkdownPart::Tag => write!(out, "")?,
             MarkdownPart::Interpolation => write!(out, "")?,

@@ -39,7 +39,7 @@ pub enum MarkdownElement<'a> {
     // TODO at start?
     Frontmatter(Frontmatter<'a>),
     HorizontalRule,
-    Footnote,
+    // Footnote,
     Empty,
 }
 

@@ -223,7 +223,14 @@ pub fn extract_slides(on: &str) -> Vec<Slide> {
     let mut current_slide = Slide::default();
     let mut start: usize = 0;
 
+    let mut in_code_block = false;
+
     for line in on.lines() {
+        if line.starts_with("```") {
+            in_code_block ^= true;
+        } else if in_code_block {
+            continue;
+        };
         let heading_level = if line.starts_with('#') {
             let level = line.chars().take_while(|c| *c == '#').count();
             // Fixes tags
@@ -537,8 +544,8 @@ impl<'a> MarkdownElement<'a> {
             Self::Frontmatter(frontmatter) => {
                 format!("---\n{source}---", source = frontmatter.0)
             }
-            #[cfg(feature = "html")]
-            Self::HTMLElement { element: _, source } => source.to_string(),
+            // #[cfg(feature = "html")]
+            // Self::HTMLElement { element: _, source } => source.to_string(),
             Self::Empty => String::new(),
             item => format!("TODO {item:?}"),
         }
@@ -732,10 +739,10 @@ impl<'a> MarkdownElement<'a> {
                     arguments = command_block.parse_arguments()
                 )
             }
-            #[cfg(feature = "html")]
-            MarkdownElement::HTMLElement { element, .. } => {
-                format!("HTMLElement({element:?})")
-            }
+            // #[cfg(feature = "html")]
+            // MarkdownElement::HTMLElement { element, .. } => {
+            //     format!("HTMLElement({element:?})")
+            // }
             #[cfg(feature = "yaml")]
             MarkdownElement::Frontmatter(frontmatter) => {
                 let mut s = "Frontmatter { ".to_owned();

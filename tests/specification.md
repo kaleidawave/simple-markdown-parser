@@ -13,7 +13,6 @@ Specifically these are supported extensions
 - Tables
 - Internal links (with block references)
 - Comments (markdown)
-- HTML elements
 - List task checkboxes
 - Strikethroughs
 - Highlights
@@ -21,6 +20,7 @@ Specifically these are supported extensions
 
 %%
 - Footnotes
+- HTML elements
 %%
 
 > The output uses a custom `Debug` implementation to fully explore the parse output. See the documentation for the actual structure produced by the parser
@@ -363,12 +363,6 @@ HorizontalRule
 Paragraph("more text")
 ```
 
-### Footnotes
-
-> [See](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax#footnotes)
-
-> TODO
-
 ### Block comments
 
 ```md
@@ -457,10 +451,6 @@ The rest is considered regular text, but can be styled with the following. These
 - Subscript
 
 > No underlines, colors
-
-### HTML elements
-
-> This is based of [lightml](https://github.com/kaleidawave/lightml)
 
 ### Code
 
@@ -589,8 +579,6 @@ Paragraph([InternalLink { to: "#x" } ("#x")])
 #### Media links
 
 > Here the text content becomes its [`alt` text](https://developer.mozilla.org/en-US/docs/Web/API/HTMLImageElement/alt)
-
-![...](https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExeHhzc2tuNmFlcHNnMWRyNG1jNzlkMXA3andraGRvZDh2MzJ4cXJvcSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/SwpQtSRf8Ekby5IsTw/giphy.gif)
 
 ```md
 ![...](https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExeHhzc2tuNmFlcHNnMWRyNG1jNzlkMXA3andraGRvZDh2MzJ4cXJvcSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/SwpQtSRf8Ekby5IsTw/giphy.gif)
