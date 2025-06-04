@@ -31,11 +31,11 @@ pub enum MarkdownElement<'a> {
     CommentBlock(&'a str),
     /// Includes HTML comments
     // TODO how much to do here
-    #[cfg(feature = "html")]
-    HTMLElement {
-        element: lightml::Element<'a>,
-        source: &'a str,
-    },
+    // #[cfg(feature = "html")]
+    // HTMLElement {
+    //     element: lightml::Element<'a>,
+    //     source: &'a str,
+    // },
     // TODO at start?
     Frontmatter(Frontmatter<'a>),
     HorizontalRule,
@@ -367,31 +367,30 @@ pub fn parse_with_options<'a, T>(
                             state = State::CommandHeader;
                         }
                     } else {
-                        // TODO maybe a little more
-                        #[cfg(feature = "html")]
-                        if line.starts_with("<") {
-                            use lightml::Element;
-                            let current = &on[upto..];
+                        // #[cfg(feature = "html")]
+                        // if line.starts_with("<") {
+                        //     use lightml::Element;
+                        //     let current = &on[upto..];
 
-                            let result = Element::from_string(current);
-                            let (element, consumed) = match result {
-                                Ok(result) => result,
-                                Err(err) => {
-                                    panic!("{err:?}");
-                                }
-                            };
-                            let source = &current[..consumed as usize];
-                            // TODO eww
-                            {
-                                (0..source.chars().count()).for_each(|_| {
-                                    char_indices.next();
-                                });
-                            }
-                            cb(MarkdownElement::HTMLElement { element, source })
-                                .map_err(MarkdownParseError::FromCallback)?;
-                            upto += consumed as usize;
-                            continue;
-                        }
+                        //     let result = Element::from_string(current);
+                        //     let (element, consumed) = match result {
+                        //         Ok(result) => result,
+                        //         Err(err) => {
+                        //             panic!("{err:?}");
+                        //         }
+                        //     };
+                        //     let source = &current[..consumed as usize];
+                        //     // TODO eww
+                        //     {
+                        //         (0..source.chars().count()).for_each(|_| {
+                        //             char_indices.next();
+                        //         });
+                        //     }
+                        //     cb(MarkdownElement::HTMLElement { element, source })
+                        //         .map_err(MarkdownParseError::FromCallback)?;
+                        //     upto += consumed as usize;
+                        //     continue;
+                        // }
 
                         if options.heading_underscores
                             && !line.trim().is_empty()
