@@ -71,16 +71,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lightml"
-version = "0.0.2"
-source = "git+https://github.com/kaleidawave/lightml?branch=fixes1#38bc80db229ab75fbd879fc9b50c85f3b42ed2ed"
-dependencies = [
- "console_error_panic_hook",
- "js-sys",
- "wasm-bindgen",
-]
-
-[[package]]
 name = "log"
 version = "0.4.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -210,13 +200,19 @@ dependencies = [
  "codespan-reporting",
  "console_error_panic_hook",
  "js-sys",
- "lightml",
  "pretty_assertions",
  "serde",
  "serde-wasm-bindgen 0.6.5",
+ "simple-yaml-parser",
  "tsify",
  "wasm-bindgen",
 ]
+
+[[package]]
+name = "simple-yaml-parser"
+version = "0.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4d79b1476a927af5cc88678adf66095da3f7ede2cf13658470687495db8f5f41"
 
 [[package]]
 name = "syn"

@@ -8,25 +8,22 @@ pub mod utilities;
 pub enum MarkdownElement<'a> {
     Heading {
         level: u8,
-        text: RawText<'a>,
+        content: RawText<'a>,
     },
     Quote(QuoteBlock<'a>),
     Paragraph(RawText<'a>),
     ListItem {
         level: u8,
-        text: RawText<'a>,
+        content: RawText<'a>,
         /// TODO probably need more options here
         enumerated: bool,
         /// from `- [x]` etc
-        checked: Option<bool>
+        checked: Option<bool>,
     },
     Table(Table<'a>),
     // TODO modifiers
-    CodeBlock {
-        language: &'a str,
-        code: &'a str,
-    },
-    LaTeXBlock {
+    CodeBlock(CodeBlock<'a>),
+    BlockMathematics {
         script: &'a str,
     },
     CommandBlock(CommandBlock<'a>),
@@ -40,121 +37,10 @@ pub enum MarkdownElement<'a> {
         source: &'a str,
     },
     // TODO at start?
-    Frontmatter(&'a str),
+    Frontmatter(Frontmatter<'a>),
     HorizontalRule,
-    // Media {
-    //     alt: &'a str,
-    //     link: Option<&'a str>,
-    //     source: &'a str,
-    // },
     Footnote,
     Empty,
-}
-
-impl<'a> MarkdownElement<'a> {
-    #[must_use]
-    pub fn as_markdown(&self) -> String {
-        match self {
-            Self::Heading { level, text } => {
-                let mut s = "#".repeat(*level as usize);
-                s.push_str(text.0);
-                s.push(' ');
-                s
-            }
-            Self::ListItem {
-                level,
-                text,
-                enumerated: _,
-                checked
-            } => {
-                // TODO enumerated
-                let mut s = "\t".repeat(*level as usize);
-                s.push_str("- ");
-                if let Some(checked) = checked {
-                    s.push_str(if *checked { "[x]" }  else { "[ ]" });
-                }
-                s.push_str(text.0);
-                s
-            }
-            Self::CodeBlock { language, code } => {
-                format!("```{language}\n{code}```")
-                // let mut s = "```".to_owned();
-                // s.push_str(language);
-                // s.push_str("\n");
-                // s.push_str("```");
-                // s
-            }
-            Self::Paragraph(text) => text.0.to_owned(),
-            Self::Quote(text) => text.inner.to_owned(),
-            Self::Frontmatter(source) => {
-                format!("---\n{source}---")
-            }
-            #[cfg(feature = "html")]
-            Self::HTMLElement { element: _, source } => source.to_string(),
-            Self::Empty => String::new(),
-            item => format!("TODO {item:?}"),
-        }
-    }
-
-    /// Paragraph text like elements
-    #[must_use]
-    pub fn inner_paragraph_raw(&self) -> Option<&str> {
-        if let MarkdownElement::Paragraph(text) = self {
-            Some(text.0)
-        } else if let MarkdownElement::Quote(text) = self {
-            // TODO these can be sometimes made up of elements
-            Some(text.inner)
-        } else {
-            None
-        }
-    }
-
-    #[must_use]
-    pub fn parts_like(&self) -> Option<RawText<'a>> {
-        if let MarkdownElement::Heading { text, .. }
-        | MarkdownElement::Paragraph(text)
-        | MarkdownElement::ListItem { text, .. } = self
-        {
-            Some(*text)
-        } else {
-            // else if let MarkdownElement::Quote(text) = self {
-            //     // TODO these can be sometimes made up of elements
-            //     Some(RawText(text.0))
-            // }
-            None
-        }
-    }
-
-    #[allow(clippy::match_same_arms)]
-    #[must_use]
-    pub fn debug_without_text(&self) -> String {
-        match self {
-            MarkdownElement::Heading { level, text: _ } => {
-                format!("Heading {{ level: {level} }}")
-            }
-            MarkdownElement::Quote(_) => "Quote".to_owned(),
-            MarkdownElement::Paragraph(_) => "Paragraph".to_owned(),
-            MarkdownElement::ListItem {
-                level,
-                text: _,
-                enumerated,
-                checked
-            } => {
-                format!("ListItem {{ level: {level}, enumerated: {enumerated:?}, checked: {checked:?} }}")
-            }
-            MarkdownElement::Table(_table) => "Table".to_owned(),
-            MarkdownElement::CodeBlock { language, code: _ } => format!("CodeBlock ({language})"),
-            MarkdownElement::LaTeXBlock { script: _ } => "LaTeXBlock {{ .. }}".to_owned(),
-            MarkdownElement::CommandBlock(_) => "CommandBlock".to_owned(),
-            MarkdownElement::CommentBlock(_) => "CommentBlock".to_owned(),
-            MarkdownElement::Frontmatter(_) => "Frontmatter".to_owned(),
-            MarkdownElement::HorizontalRule => "HorizontalRule".to_owned(),
-            MarkdownElement::Footnote => "Footnote".to_owned(),
-            MarkdownElement::Empty => "Empty".to_owned(),
-            #[cfg(feature = "html")]
-            Self::HTMLElement { .. } => "HTMLElement".to_owned(),
-        }
-    }
 }
 
 /// (unsplit) Text inside markdown item
@@ -164,94 +50,12 @@ pub struct RawText<'a>(pub &'a str);
 impl<'a> RawText<'a> {
     #[must_use]
     pub fn parts(&self) -> PartsIterator<'a> {
-        PartsIterator::new(self.0, false)
-    }
-
-    #[must_use]
-    pub fn parts_whitespace(&self) -> PartsIterator<'a> {
-        PartsIterator::new(self.0, true)
-    }
-
-    #[must_use]
-    pub fn no_decoration(&self) -> String {
-        let mut s = String::new();
-        for part in PartsIterator::new(self.0, false) {
-            s.push_str(part.no_decoration());
-        }
-        s
-    }
-}
-
-/// Some are prefixes, some are wrapped
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum MarkdownTextElement<'a> {
-    Plain(&'a str),
-    /// `*hi*` or `_hi_`
-    Italic(&'a str),
-    /// `**hi**` or `__hi__`
-    Bold(&'a str),
-    /// **_hi_**
-    BoldAndItalic(&'a str),
-    /// `` `code` ``
-    Code(&'a str),
-    /// `~~gone~~`
-    StrikeThrough(&'a str),
-    /// `:emoji:`
-    Emoji(&'a str),
-    /// `$\sin$`
-    Latex(&'a str),
-    /// `{something}` TODO WIP
-    Expression(&'a str),
-    /// `==hightlighted==`
-    Highlight(&'a str),
-    /// `^superscript^`
-    Superscript(&'a str),
-    /// `~subscript~` (unfortuantly not _)
-    Subscript(&'a str),
-    /// `#item`
-    Tag(&'a str),
-    /// `[on](to)`
-    Link {
-        /// TODO not great but..
-        on: RawText<'a>,
-        to: &'a str,
-    },
-    /// `![alt](source)`
-    Media {
-        alt: &'a str,
-        source: &'a str,
-    },
-}
-
-impl<'a> MarkdownTextElement<'a> {
-    #[must_use]
-    pub fn no_decoration(&self) -> &'a str {
-        match self {
-            MarkdownTextElement::Plain(i)
-            | MarkdownTextElement::Bold(i)
-            | MarkdownTextElement::Italic(i)
-            | MarkdownTextElement::BoldAndItalic(i)
-            | MarkdownTextElement::Code(i)
-            | MarkdownTextElement::StrikeThrough(i)
-            | MarkdownTextElement::Emoji(i)
-            | MarkdownTextElement::Latex(i)
-            | MarkdownTextElement::Highlight(i)
-            | MarkdownTextElement::Subscript(i)
-            | MarkdownTextElement::Superscript(i)
-            | MarkdownTextElement::Tag(i) => i,
-            MarkdownTextElement::Expression(_) | MarkdownTextElement::Media { .. } => "",
-            MarkdownTextElement::Link { on: _, to: _ } => {
-                eprintln!("TODO no decoration link");
-                ""
-            }
-        }
+        PartsIterator::new(self.0)
     }
 }
 
 #[derive(Default, Copy, Clone)]
 pub struct ParseOptions {
-    /// For formatting preservation
-    pub include_new_lines: bool,
     /// Avoid
     pub allow_asterisk_and_plus_as_list_prefixes: bool,
     /// Avoid
@@ -314,7 +118,7 @@ pub fn parse_with_options<'a, T>(
             if trimmed[level..].starts_with(char::is_whitespace) {
                 MarkdownElement::Heading {
                     level: level.try_into().expect("deep header"),
-                    text: RawText(item[level..].trim()),
+                    content: RawText(trimmed[level..].trim()),
                 }
             } else {
                 // Fix for tags
@@ -333,18 +137,18 @@ pub fn parse_with_options<'a, T>(
 
             MarkdownElement::ListItem {
                 level: level.try_into().expect("deep list item"),
-                text: RawText(trimmed),
+                content: RawText(trimmed),
                 enumerated: false,
-                checked
+                checked,
             }
-        } else if let Some(trimmed) = strip_number_prefix(trimmed) {
+        } else if let Some(trimmed) = utilities::strip_number_prefix(trimmed) {
             let level = item.chars().take_while(|c| *c == '\t' || *c == ' ').count();
             MarkdownElement::ListItem {
                 // TODO take number
                 level: level.try_into().expect("deep list item"),
-                text: RawText(trimmed.trim()),
+                content: RawText(trimmed.trim()),
                 enumerated: true,
-                checked: None
+                checked: None,
             }
         } else {
             MarkdownElement::Paragraph(RawText(trimmed))
@@ -355,296 +159,383 @@ pub fn parse_with_options<'a, T>(
     let mut upto = 0;
     let mut last_line = 0;
 
-    // Some => in_code
-    // first argument holds the end
-    let mut current_code_language: Option<(&str, &str)> = None;
+    #[derive(Clone, Copy, Debug)]
+    enum State<'a> {
+        None,
+        CodeBlock {
+            language: &'a str,
+            delimeter: &'a str,
+        },
+        Command {
+            name: &'a str,
+            arguments: &'a str,
+        },
+        Frontmatter,
+        Table,
+        MathematicsBlock,
+        MarkdownComment,
+        CommandHeader,
+        Quote {
+            alert: Option<&'a str>,
+        },
+    }
 
-    let mut current_command_and_arguments: Option<(&str, &str)> = None;
-
-    let mut in_frontmatter = false;
-    let mut in_table = false;
-    let mut in_latex_block = false;
-    let mut in_markdown_comment = false;
-    let mut in_command_header = false;
-    // Some => in_quote
-    let mut quote_and_alert: Option<&str> = None;
+    let mut state = State::None;
 
     let mut char_indices = on.char_indices().chain([(on.len(), '\n')]);
 
     while let Some((idx, chr)) = char_indices.next() {
-        if chr == '\n' {
+        if let '\n' = chr {
             let mut line = &on[last_line..idx];
+            if let State::None = state {
+                // FUTURE needs improving
+                let continuation = line.starts_with(|chr: char| chr.is_alphabetic())
+                    && (line.trim_end().ends_with('\\')
+                        || on.get((idx + 1)..).is_some_and(|rest| {
+                            utilities::strip_upto_three_spaces(rest)
+                                .starts_with(|chr: char| chr.is_alphanumeric())
+                        }));
+
+                if continuation {
+                    continue;
+                }
+                if on[last_line..].is_empty() {
+                    break;
+                }
+            }
+
             for _ in 0..quote_depth {
-                // TODO
+                // FUTURE unwrap?
                 line = line.strip_prefix('>').unwrap_or(line);
             }
-            let end = idx;
-            
-            if quote_and_alert.is_some() {
-                if line.starts_with("> ") {
-                    last_line = idx + '\n'.len_utf8();
-                    continue;
-                }
-                let raw = &on[upto..end];
-                let quote_block = QuoteBlock {
-                    alert: quote_and_alert.take(),
-                    inner: raw,
-                };
-                cb(MarkdownElement::Quote(quote_block))
-                    .map_err(MarkdownParseError::FromCallback)?;
-                upto = last_line;
-            }
 
-            if let Some((to_match, _)) = current_code_language {
-                if line.trim().strip_prefix("```").is_some_and(|rest| rest == to_match) {
-                    // Important that take is done to reset option
-                    let current_code_language = current_code_language.take().unwrap().1;
-                    cb(MarkdownElement::CodeBlock {
-                        language: current_code_language,
-                        code: &on[upto..last_line],
-                    })
-                    .map_err(MarkdownParseError::FromCallback)?;
-                    upto = last_line;
-                }
-            } else if let Some((current_command, arguments)) = current_command_and_arguments {
-                if let Some(command_line) = strip_surrounds(line, "{%", "%}") {
-                    let is_command = command_line
-                        .trim()
-                        .strip_prefix('/')
-                        .is_some_and(|command| current_command == command);
-
-                    if is_command {
-                        cb(MarkdownElement::CommandBlock(CommandBlock {
-                            name: current_command,
-                            arguments,
-                            inner: RawMarkdown(&on[upto..last_line]),
-                        }))
-                        .map_err(MarkdownParseError::FromCallback)?;
-                        current_command_and_arguments = None;
-                        upto = last_line;
+            match state {
+                State::Quote { alert } => {
+                    if line.starts_with("> ") {
+                        last_line = idx + '\n'.len_utf8();
+                        continue;
                     }
-                }
-            } else if in_latex_block {
-                if let "$$" = line.trim() {
-                    cb(MarkdownElement::LaTeXBlock {
-                        script: on[upto..last_line].trim(),
-                    })
-                    .map_err(MarkdownParseError::FromCallback)?;
-                    in_latex_block = false;
+                    let inner = &on[upto..idx].trim_end();
+                    let quote_block = QuoteBlock { alert, inner };
+                    cb(MarkdownElement::Quote(quote_block))
+                        .map_err(MarkdownParseError::FromCallback)?;
                     upto = last_line;
+                    state = State::None;
                 }
-            } else if in_markdown_comment {
-                if line.trim_end().ends_with("%%") {
-                    cb(MarkdownElement::CommentBlock(on[upto..last_line].trim()))
-                        .map_err(MarkdownParseError::FromCallback)?;
-                    in_markdown_comment = false;
-                    upto = last_line;
-                }
-            } else if in_command_header {
-                if let Some(command_line) = line.strip_prefix("%}") {
-                    if let Some(command_line) = command_line.strip_suffix('/') {
-                        let (current_command, arguments) =
-                            command_line.split_once(' ').unwrap_or((command_line, ""));
-                        cb(MarkdownElement::CommandBlock(CommandBlock {
-                            name: current_command,
-                            arguments,
-                            inner: RawMarkdown(""),
-                        }))
-                        .map_err(MarkdownParseError::FromCallback)?;
-                        upto = last_line;
-                    } else {
-                        current_command_and_arguments =
-                            Some(command_line.split_once(' ').unwrap_or((command_line, "")));
-                    }
-                }
-            } else if in_table {
-                if !line.trim_end().ends_with('|') {
-                    cb(MarkdownElement::Table(Table(on[upto..last_line].trim())))
-                        .map_err(MarkdownParseError::FromCallback)?;
-                    in_table = false;
-                }
-            } else if in_frontmatter {
-                let is_horizontal_rule = "---" == line.trim();
-                if is_horizontal_rule {
-                    cb(MarkdownElement::Frontmatter(&on[upto..last_line]))
-                        .map_err(MarkdownParseError::FromCallback)?;
-                    in_frontmatter = false;
-                    upto = end;
-                }
-            } else if let Some(rest) = line.trim().strip_prefix("```") {
-                let matching = rest.chars().filter(|c| *c == '`').count();
-                // For nesting
-                let backticks = &rest[..matching];
-                let trailing = &rest[matching..];
-                // TODO other motifiers here?
-                current_code_language = Some((backticks, trailing));
-                upto = idx + '\n'.len_utf8();
-            } else if let "$$" = line.trim() {
-                in_latex_block = true;
-                upto = idx + '\n'.len_utf8();
-            } else if line.starts_with('|') {
-                in_table = true;
-                upto = last_line;
-            } else if let Some(inner) = line.strip_prefix('>') {
-                let command = strip_surrounds(inner, "[!", "]");
-                if command.is_some() {
-                    upto = end;
-                }
-                quote_and_alert = Some(command.unwrap_or_default());
-            } else if let Some(line) = line.trim_start().strip_prefix("%%") {
-                if let Some(out) = line.trim_end().strip_suffix("%%") {
-                    let element = MarkdownElement::CommentBlock(out.trim());
-                    cb(element).map_err(MarkdownParseError::FromCallback)?;
-                } else {
-                    in_markdown_comment = true;
-                    upto = idx + '\n'.len_utf8();
-                }
-            } else if upto == 0 && "---" == line.trim() {
-                in_frontmatter = true;
-                upto = idx + '\n'.len_utf8();
-            } else if let Some(line) = line.strip_prefix("{%") {
-                if let Some(command_line) = line.strip_suffix("/%}").map(str::trim) {
-                    let (current_command, arguments) =
-                        command_line.split_once(' ').unwrap_or((command_line, ""));
-                    let element = MarkdownElement::CommandBlock(CommandBlock {
-                        name: current_command,
-                        arguments,
-                        inner: RawMarkdown(""),
-                    });
-                    cb(element).map_err(MarkdownParseError::FromCallback)?;
-                    upto = last_line;
-                    continue;
-                } else if let Some(command_line) = line.strip_prefix("%}") {
-                    current_command_and_arguments =
-                        Some(command_line.split_once(' ').unwrap_or((command_line, "")));
-                } else {
-                    in_command_header = true;
-                }
-            } else {
-                // TODO maybe a little more
-                #[cfg(feature = "html")]
-                if line.starts_with("<") {
-                    use lightml::Element;
-                    let current = &on[upto..];
-
-                    let result = Element::from_string(current);
-                    let (element, consumed) = match result {
-                        Ok(result) => result,
-                        Err(err) => {
-                            panic!("{err:?}");
-                        }
-                    };
-                    let source = &current[..consumed as usize];
-                    // TODO eww
-                    {
-                        (0..source.chars().count()).for_each(|_| {
-                            char_indices.next();
+                State::CodeBlock {
+                    language,
+                    delimeter,
+                } => {
+                    if line.starts_with(delimeter) {
+                        // Important that take is done to reset option
+                        let code_block = MarkdownElement::CodeBlock(CodeBlock {
+                            language,
+                            code: &on[upto..last_line],
                         });
+                        cb(code_block).map_err(MarkdownParseError::FromCallback)?;
+                        upto = last_line;
+                        state = State::None;
                     }
-                    cb(MarkdownElement::HTMLElement { element, source })
-                        .map_err(MarkdownParseError::FromCallback)?;
-                    upto += consumed as usize;
-                    continue;
                 }
+                State::Command { name, arguments } => {
+                    if let Some(command_line) = utilities::strip_surrounds(line, "{%", "%}") {
+                        let is_command = command_line
+                            .trim()
+                            .strip_prefix('/')
+                            .is_some_and(|command| name == command);
 
-                // todo if options.underscore_headings && source[idx..].starts_with("---") {
-                //     to header
-                // }
-
-                let result = classify_line(line, options);
-                let to_add = !matches!(
-                    (options.include_new_lines, &result),
-                    (false, MarkdownElement::Empty)
-                );
-                if to_add {
-                    cb(result).map_err(MarkdownParseError::FromCallback)?;
+                        if is_command {
+                            let command_block = MarkdownElement::CommandBlock(CommandBlock {
+                                name,
+                                arguments,
+                                inner: RawMarkdown(&on[upto..last_line]),
+                            });
+                            cb(command_block).map_err(MarkdownParseError::FromCallback)?;
+                            upto = last_line;
+                            state = State::None;
+                        }
+                    }
                 }
-                upto = idx + '\n'.len_utf8();
+                State::MathematicsBlock => {
+                    if let "$$" = line.trim() {
+                        let mathematics_block = MarkdownElement::BlockMathematics {
+                            script: on[upto..last_line].trim(),
+                        };
+                        cb(mathematics_block).map_err(MarkdownParseError::FromCallback)?;
+                        upto = last_line;
+                        state = State::None;
+                    }
+                }
+                State::MarkdownComment => {
+                    if line.trim_end().ends_with("%%") {
+                        let comment_block =
+                            MarkdownElement::CommentBlock(on[upto..last_line].trim());
+                        cb(comment_block).map_err(MarkdownParseError::FromCallback)?;
+                        upto = last_line;
+                        state = State::None;
+                    }
+                }
+                State::CommandHeader => {
+                    if let Some(command_line) = line.strip_prefix("%}") {
+                        if let Some(command_line) = command_line.strip_suffix('/') {
+                            let (current_command, arguments) =
+                                command_line.split_once(' ').unwrap_or((command_line, ""));
+                            let command_block = MarkdownElement::CommandBlock(CommandBlock {
+                                name: current_command,
+                                arguments,
+                                inner: RawMarkdown(""),
+                            });
+                            cb(command_block).map_err(MarkdownParseError::FromCallback)?;
+                            upto = last_line;
+                            state = State::None;
+                        } else {
+                            let (name, arguments) =
+                                command_line.split_once(' ').unwrap_or((command_line, ""));
+                            state = State::Command { name, arguments };
+                        }
+                    }
+                }
+                State::Table => {
+                    if !line.trim_end().ends_with('|') {
+                        let table = MarkdownElement::Table(Table(on[upto..last_line].trim()));
+                        cb(table).map_err(MarkdownParseError::FromCallback)?;
+                        state = State::None;
+                    }
+                }
+                State::Frontmatter => {
+                    let is_horizontal_rule = "---" == line.trim();
+                    if is_horizontal_rule {
+                        let frontmatter =
+                            MarkdownElement::Frontmatter(Frontmatter(&on[upto..last_line]));
+                        cb(frontmatter).map_err(MarkdownParseError::FromCallback)?;
+                        state = State::None;
+                        upto = idx + 1;
+                    }
+                }
+                State::None => {
+                    if line.starts_with("```") {
+                        let matching = line.chars().take_while(|c| *c == '`').count();
+                        // For nesting
+                        let backticks = &line[..matching];
+                        // TODO other motifiers here?
+                        let language = &line[matching..].trim();
+                        state = State::CodeBlock {
+                            delimeter: backticks,
+                            language,
+                        };
+                        upto = idx + '\n'.len_utf8();
+                    } else if let "$$" = line.trim() {
+                        state = State::MathematicsBlock;
+                        upto = idx + '\n'.len_utf8();
+                    } else if line.starts_with('|') {
+                        state = State::Table;
+                        upto = last_line;
+                    } else if let Some(inner) = line.strip_prefix('>') {
+                        let alert = utilities::strip_surrounds(inner, "[!", "]");
+                        if alert.is_some() {
+                            upto = idx + 1;
+                        }
+                        state = State::Quote { alert };
+                    } else if let Some(line) = line.trim_start().strip_prefix("%%") {
+                        if let Some(out) = line.trim_end().strip_suffix("%%") {
+                            let comment_block = MarkdownElement::CommentBlock(out.trim());
+                            cb(comment_block).map_err(MarkdownParseError::FromCallback)?;
+                        } else {
+                            state = State::MarkdownComment;
+                            upto = idx + '\n'.len_utf8();
+                        }
+                    } else if upto == 0 && "---" == line.trim() {
+                        state = State::Frontmatter;
+                        upto = idx + '\n'.len_utf8();
+                    } else if let Some(line) = line.strip_prefix("{%").map(str::trim_end) {
+                        if let Some(command_line) = line.strip_suffix("/%}").map(str::trim) {
+                            let (current_command, arguments) =
+                                command_line.split_once(' ').unwrap_or((command_line, ""));
+                            let command_block = MarkdownElement::CommandBlock(CommandBlock {
+                                name: current_command,
+                                arguments,
+                                inner: RawMarkdown(""),
+                            });
+                            cb(command_block).map_err(MarkdownParseError::FromCallback)?;
+                            upto = idx;
+                        } else if let Some(command_line) = line.strip_suffix("%}").map(str::trim) {
+                            upto = idx;
+                            let (name, arguments) =
+                                command_line.split_once(' ').unwrap_or((command_line, ""));
+                            state = State::Command { name, arguments };
+                        } else {
+                            state = State::CommandHeader;
+                        }
+                    } else {
+                        // TODO maybe a little more
+                        #[cfg(feature = "html")]
+                        if line.starts_with("<") {
+                            use lightml::Element;
+                            let current = &on[upto..];
+
+                            let result = Element::from_string(current);
+                            let (element, consumed) = match result {
+                                Ok(result) => result,
+                                Err(err) => {
+                                    panic!("{err:?}");
+                                }
+                            };
+                            let source = &current[..consumed as usize];
+                            // TODO eww
+                            {
+                                (0..source.chars().count()).for_each(|_| {
+                                    char_indices.next();
+                                });
+                            }
+                            cb(MarkdownElement::HTMLElement { element, source })
+                                .map_err(MarkdownParseError::FromCallback)?;
+                            upto += consumed as usize;
+                            continue;
+                        }
+
+                        if options.heading_underscores
+                            && !line.trim().is_empty()
+                            && utilities::strip_upto_one_new_line(&on[idx..]).starts_with("---")
+                        {
+                            let header = MarkdownElement::Heading {
+                                // FUTURE I think
+                                level: 1,
+                                content: RawText(line),
+                            };
+                            // FUTURE I think this can break
+                            upto = idx + '\n'.len_utf8() + "---".len();
+                            last_line = upto;
+                            cb(header).map_err(MarkdownParseError::FromCallback)?;
+                            continue;
+                        } else {
+                            let item = classify_line(line, options);
+                            cb(item).map_err(MarkdownParseError::FromCallback)?;
+                            upto = idx + '\n'.len_utf8();
+                        }
+                    }
+                }
             }
 
             last_line = idx + '\n'.len_utf8();
         }
     }
 
-    if current_code_language.is_some() {
-        eprintln!("TODO error current_code_language={current_code_language:?}");
-        // todo!("error here");
-    } else if in_latex_block {
-        eprintln!("TODO unclosed latex block");
+    if !matches!(state, State::None) {
+        eprintln!("TODO state {state:?} error");
     }
-
-    // let line = on[upto..].trim_start();
-    // if in_table {
-    //     cb(MarkdownElement::Table(Table(line))).map_err(MarkdownParseError::FromCallback)?;
-    // } else if let Some(content) = line.strip_prefix("> ") {
-    //     let command_block = CommandBlock {
-    //         name: "quote",
-    //         arguments: quote_and_alert.unwrap_or_default(),
-    //         inner: RawMarkdown(content),
-    //     };
-    //     cb(MarkdownElement::CommandBlock(command_block))
-    //         .map_err(MarkdownParseError::FromCallback)?;
-    // } else if let (Some(current_code_language), "```") = (current_code_language, line.trim()) {
-
-    // } else {
-    //     let result = classify_line(line, options);
-    //     let to_add = !matches!(
-    //         (options.include_new_lines, &result),
-    //         (false, MarkdownElement::Empty)
-    //     );
-    //     if to_add {
-    //         cb(result).map_err(MarkdownParseError::FromCallback)?;
-    //     }
-    // }
 
     Ok(())
 }
 
-/// Work in progress abstraction for iterating over markdown text sections giving decoration (bold, links, etc) information
-/// TODO WIP
+#[derive(Debug, PartialEq, Eq, Default, Clone, Copy)]
+pub struct TextDecoration(pub(crate) u8);
+
+impl std::ops::BitXor for TextDecoration {
+    type Output = Self;
+
+    fn bitxor(self, rhs: Self) -> Self::Output {
+        Self(self.0 ^ rhs.0)
+    }
+}
+
+impl std::ops::BitXorAssign for TextDecoration {
+    fn bitxor_assign(&mut self, rhs: Self) {
+        self.0 ^= rhs.0;
+    }
+}
+
+impl std::ops::BitAnd for TextDecoration {
+    type Output = Self;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        Self(self.0 & rhs.0)
+    }
+}
+
+impl std::ops::BitAndAssign for TextDecoration {
+    fn bitand_assign(&mut self, rhs: Self) {
+        self.0 &= rhs.0;
+    }
+}
+
+impl TextDecoration {
+    pub const NONE: TextDecoration = TextDecoration(0 << 0);
+
+    // Basic decoration
+    pub const BOLD: TextDecoration = TextDecoration(1 << 0);
+    pub const EMPHASIS: TextDecoration = TextDecoration(1 << 1);
+
+    // More
+    pub const HIGHLIGHTED: TextDecoration = TextDecoration(1 << 2);
+    pub const STRIKETHROUGH: TextDecoration = TextDecoration(1 << 3);
+
+    // Above or below
+    pub const SUPERSCRIPT: TextDecoration = TextDecoration(1 << 4);
+    pub const SUBSCRIPT: TextDecoration = TextDecoration(1 << 5);
+
+    pub fn contains(self, other: TextDecoration) -> bool {
+        (self.0 & other.0) != 0
+    }
+
+    pub fn is_empty(self) -> bool {
+        self == Self::NONE
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub enum MarkdownPart<'a> {
+    #[default]
+    Plain,
+    InlineCode,
+    InlineMathematics,
+    Emoji,
+    Tag,
+    Interpolation,
+    // Links
+    /// `<...>`
+    RawLink,
+    InternalLink {
+        to: &'a str,
+    },
+    ExternalLink {
+        to: &'a str,
+    },
+    // Alt text = on
+    MediaLink {
+        source: &'a str,
+    },
+}
+
+/// Abstraction for iterating over markdown content sections giving decoration (bold, links, etc) information
 #[allow(clippy::struct_excessive_bools)]
 pub struct PartsIterator<'a> {
     on: &'a str,
-    // Ignores empty strings, trims text blocks
-    preserve_whitespace: bool,
     // Internal state
     last: usize,
-    in_tag: bool,
-    pub in_bold: bool,
-    pub in_italic: bool,
-    in_code: bool,
-    in_latex: bool,
-    in_emoji: bool,
-    in_expression: bool,
-    in_chevron_link: bool,
-    in_link: bool,
-    in_internal_link: bool,
-    in_media: bool,
+    // Decoration state
+    decoration: TextDecoration,
 }
 
 impl<'a> PartsIterator<'a> {
     #[must_use]
-    pub fn new(on: &'a str, preserve_whitespace: bool) -> Self {
+    pub fn new(on: &'a str) -> Self {
         Self {
-            on,
-            preserve_whitespace,
+            on: on.trim_start(),
             last: 0,
-            in_tag: false,
-            in_bold: false,
-            in_italic: false,
-            in_emoji: false,
-            in_code: false,
-            in_latex: false,
-            in_link: false,
-            in_chevron_link: false,
-            in_internal_link: false,
-            in_media: false,
-            in_expression: false,
+            decoration: TextDecoration::default(),
         }
     }
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+pub struct MarkdownTextElement<'a> {
+    pub on: &'a str,
+    pub decoration: TextDecoration,
+    pub kind: MarkdownPart<'a>,
+}
+
 impl<'a> Iterator for PartsIterator<'a> {
+    // TODO Result
     type Item = MarkdownTextElement<'a>;
 
     #[allow(clippy::too_many_lines)]
@@ -652,240 +543,273 @@ impl<'a> Iterator for PartsIterator<'a> {
         if self.last >= self.on.len() {
             None
         } else {
-            let mut link_text_end: Option<usize> = None;
-            let mut bracket_depth: usize = 0;
-
-            let mut range = &self.on[self.last..];
-            let mut iterator = range.char_indices();
-
-            while let Some((idx, chr)) = iterator.next() {
-                if self.in_link || self.in_media {
-                    if let Some(link_text_end) = link_text_end {
-                        if idx == link_text_end + 1 {
-                            if chr != '(' {
-                                if self.in_link {
-                                    self.last += idx;
-                                    self.in_link = false;
-                                    self.in_media = false;
-                                    return Some(MarkdownTextElement::Link {
-                                        on: RawText(""),
-                                        to: &range[..link_text_end],
-                                    });
-                                }
-                                panic!("media parsing broken {chr}");
-                            }
-                        } else if let ')' | ']' = chr {
-                            let in_brackets = &range[..link_text_end];
-                            let in_parenthesis = &range[link_text_end + "](".len()..idx];
-                            let element = if self.in_link {
-                                self.in_link = false;
-                                MarkdownTextElement::Link {
-                                    on: RawText(in_brackets),
-                                    to: in_parenthesis,
-                                }
-                            } else {
-                                self.in_media = false;
-                                MarkdownTextElement::Media {
-                                    alt: in_brackets,
-                                    source: in_parenthesis,
-                                }
-                            };
-
-                            self.last += idx + 1;
-                            return Some(element);
-                        }
-                    } else if let ']' = chr {
-                        if self.in_internal_link && range[idx..].starts_with("]]") {
-                            let element = if self.in_link {
-                                self.in_link = false;
-                                MarkdownTextElement::Link {
-                                    on: RawText(""),
-                                    to: &range[1..idx],
-                                }
-                            } else {
-                                self.in_media = false;
-                                MarkdownTextElement::Media {
-                                    alt: "",
-                                    source: &range[1..idx],
-                                }
-                            };
-
-                            self.last += idx + 2;
-                            return Some(element);
-                        } else if let Some(reduced_depth) = bracket_depth.checked_sub(1) {
-                            bracket_depth = reduced_depth;
-                        } else {
-                            link_text_end = Some(idx);
-                        }
-                    } else if let '[' = chr {
-                        if idx == 0 {
-                            self.in_internal_link = true;
-                            // Reset
-                            // range = &&self.on[idx..];
-                        } else {
-                            bracket_depth += 1;
-                        }
-                    }
-
-                    continue;
-                }
-
-                // TODO escaped stuff etc
-                if self.in_code {
-                    if let '`' = chr {
-                        self.last += idx + 1;
-                        self.in_code = false;
-                        return Some(MarkdownTextElement::Code(&range[..idx]));
-                    }
-                    continue;
-                }
-                // TODO escaped stuff etc
-                if let (true, '$') = (self.in_latex, chr) {
-                    self.last += idx + 1;
-                    self.in_latex = false;
-                    return Some(MarkdownTextElement::Latex(&range[..idx]));
-                }
-                // TODO escaped stuff etc
-                if let (true, ':') = (self.in_emoji, chr) {
-                    self.last += idx + 1;
-                    self.in_emoji = false;
-                    return Some(MarkdownTextElement::Emoji(&range[..idx]));
-                }
-                // TODO escaped stuff etc
-                if let (true, '}') = (self.in_expression, chr) {
-                    self.last += idx + 1;
-                    self.in_expression = false;
-                    return Some(MarkdownTextElement::Expression(&range[..idx]));
-                }
-                // TODO escaped stuff etc
-                if self.in_chevron_link {
-                    if let '>' = chr {
-                        self.last += idx + 1;
-                        self.in_chevron_link = false;
-                        let inner = &range[..idx];
-                        return Some(MarkdownTextElement::Link {
-                            // presentation as same as link
-                            on: RawText(inner),
-                            to: inner,
-                        });
-                    }
-                    continue;
-                }
-
-                if self.in_tag && chr.is_whitespace() {
-                    self.last += idx;
-                    self.in_tag = false;
-                    return Some(MarkdownTextElement::Tag(&range[..idx]));
-                }
-
-                macro_rules! yield_current {
-                    () => {{
-                        let item = &range[..idx];
-                        let item = if self.preserve_whitespace {
-                            item
-                        } else {
-                            item.trim()
-                        };
-                        if !item.is_empty() {
-                            return Some(MarkdownTextElement::Plain(item));
-                        }
-                        // Reset
-                        range = &self.on[self.last..];
-                        iterator = range.char_indices();
-                    }};
-                }
-
-                match chr {
-                    '`' => {
-                        self.last += idx + 1;
-                        self.in_code = true;
-                        yield_current!();
-                    }
-                    '$' => {
-                        self.last += idx + 1;
-                        self.in_latex = true;
-                        yield_current!();
-                    }
-                    '{' => {
-                        self.last += idx + 1;
-                        self.in_expression = true;
-                        yield_current!();
-                    }
-                    ':' if range[(idx + 1)..]
-                        .chars()
-                        .next()
-                        .is_some_and(char::is_alphanumeric) =>
-                    {
-                        // TODO check next is not whitespace etc
-                        self.last += idx + 1;
-                        self.in_emoji = true;
-                        yield_current!();
-                    }
-                    '#' => {
-                        self.last += idx + 1;
-                        self.in_tag = true;
-                        yield_current!();
-                    }
-                    '<' if range[(idx + 1)..]
-                        .chars()
-                        .next()
-                        .is_some_and(char::is_alphanumeric) =>
-                    {
-                        self.last += idx + 1;
-                        self.in_chevron_link = true;
-                        yield_current!();
-                    }
-                    '!' if range[idx..].starts_with("![") => {
-                        self.last += idx + "![".len();
-                        self.in_media = true;
-                        yield_current!();
-                    }
-                    '[' => {
-                        self.last += idx + '['.len_utf8();
-                        self.in_link = true;
-                        yield_current!();
-                    }
-                    '*' | '_' => {
-                        let start = &range[idx..];
-                        if start.starts_with("**") || start.starts_with("__") {
-                            self.last += idx + 2;
-                            self.in_bold = !self.in_bold;
-                            if self.in_bold {
-                                yield_current!();
-                            } else {
-                                return Some(MarkdownTextElement::Bold(&range[..idx]));
-                            }
-                        } else {
-                            self.last += idx + 1;
-                            self.in_italic = !self.in_italic;
-                            if self.in_italic {
-                                yield_current!();
-                            } else {
-                                return Some(MarkdownTextElement::Italic(&range[..idx]));
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-
-            self.last = self.on.len();
-            let range = if self.preserve_whitespace {
-                range
-            } else {
-                range.trim()
+            let range = &self.on[self.last..];
+            let Some(first_char) = range.chars().next() else {
+                return None;
             };
 
-            if range.is_empty() {
-                None
-            } else if let Some(_link_text_end) = link_text_end {
-                eprintln!("Link text end!!");
-                None
-            } else if self.in_tag {
-                Some(MarkdownTextElement::Tag(range))
-            } else {
-                // TODO errors left overs. But also others such as tags etc
-                Some(MarkdownTextElement::Plain(range))
+            let mut escaped = false;
+
+            match first_char {
+                '$' => {
+                    let kind = MarkdownPart::InlineMathematics;
+                    for (idx, chr) in range.char_indices().skip(1) {
+                        if let '$' = chr {
+                            self.last += idx + 1;
+                            return Some(MarkdownTextElement {
+                                on: &range[1..idx],
+                                decoration: self.decoration,
+                                kind,
+                            });
+                        }
+                    }
+                    todo!("error");
+                }
+                '`' => {
+                    let kind = MarkdownPart::InlineCode;
+                    let depth = range.chars().take_while(|chr| *chr == '`').count();
+                    let delimeter = &range[..depth];
+                    for (idx, _) in range.char_indices().skip(depth) {
+                        if range[idx..].starts_with(delimeter) {
+                            self.last += idx + delimeter.len();
+                            let on = &range[delimeter.len()..idx];
+                            // https://spec.commonmark.org/0.31.2/#example-329
+                            let on = on
+                                .chars()
+                                .all(|chr| chr == ' ')
+                                .then_some(on)
+                                .unwrap_or_else(|| {
+                                    on.strip_prefix(' ')
+                                        .and_then(|rest| rest.strip_suffix(' '))
+                                        .unwrap_or(on)
+                                });
+                            return Some(MarkdownTextElement {
+                                on,
+                                decoration: self.decoration,
+                                kind,
+                            });
+                        }
+                    }
+                    todo!("error")
+                }
+                '#' => {
+                    let kind = MarkdownPart::Tag;
+                    for (idx, chr) in range.char_indices().skip(1) {
+                        if chr.is_whitespace() {
+                            self.last += idx;
+                            return Some(MarkdownTextElement {
+                                on: &range[1..idx],
+                                decoration: self.decoration,
+                                kind,
+                            });
+                        }
+                    }
+                    return Some(MarkdownTextElement {
+                        on: &range[1..],
+                        decoration: self.decoration,
+                        kind,
+                    });
+                }
+                '{' => {
+                    let kind = MarkdownPart::Interpolation;
+                    let mut brace_depth: u8 = 1;
+                    for (idx, chr) in range.char_indices().skip(1) {
+                        brace_depth = match chr {
+                            '}' => brace_depth.saturating_sub(1),
+                            '{' => brace_depth + 1,
+                            _ => brace_depth,
+                        };
+                        if brace_depth == 0 {
+                            self.last += idx + 1;
+                            return Some(MarkdownTextElement {
+                                on: &range[1..idx],
+                                decoration: self.decoration,
+                                kind,
+                            });
+                        }
+                    }
+                    todo!("error")
+                }
+                ':' if range
+                    .chars()
+                    .skip(1)
+                    .next()
+                    .is_some_and(char::is_alphanumeric) =>
+                {
+                    let kind = MarkdownPart::Emoji;
+                    for (idx, chr) in range.char_indices().skip(1) {
+                        if let ':' = chr {
+                            self.last += idx + 1;
+                            return Some(MarkdownTextElement {
+                                on: &range[1..idx],
+                                decoration: self.decoration,
+                                kind,
+                            });
+                        }
+                    }
+                    todo!("error")
+                }
+                '<' => {
+                    for (idx, chr) in range.char_indices().skip(1) {
+                        if let '>' = chr {
+                            self.last += idx + 1;
+                            // self.in_chevron_link = false;
+                            let inner = &range[1..idx];
+                            return Some(MarkdownTextElement {
+                                on: inner,
+                                decoration: self.decoration,
+                                kind: MarkdownPart::ExternalLink { to: inner },
+                            });
+                        }
+                    }
+                    todo!("error")
+                }
+                '!' if range.starts_with("![") => {
+                    let till_bracket = range
+                        .char_indices()
+                        .skip_while(|(_, chr)| *chr != ']')
+                        .next();
+                    let Some((bracket_offset, _)) = till_bracket else {
+                        todo!("error");
+                    };
+                    let alt_text = &range[2..bracket_offset];
+                    let next = &range[(bracket_offset + 1)..];
+                    let mut next_chars = next.char_indices();
+                    if let Some((_, '(')) = next_chars.next() {
+                        let Some((parenthesis_offset, _)) =
+                            next_chars.skip_while(|(_, chr)| *chr != ')').next()
+                        else {
+                            todo!("error")
+                        };
+                        let source = &range[(bracket_offset + 1)..][1..parenthesis_offset];
+                        self.last += 1 + bracket_offset + parenthesis_offset + 1;
+                        return Some(MarkdownTextElement {
+                            on: alt_text,
+                            decoration: self.decoration,
+                            kind: MarkdownPart::MediaLink { source },
+                        });
+                    } else {
+                        todo!("error")
+                    }
+                }
+                '[' => {
+                    let till_bracket = range
+                        .char_indices()
+                        .skip_while(|(_, chr)| *chr != ']')
+                        .next();
+                    let Some((bracket_offset, _)) = till_bracket else {
+                        todo!("error");
+                    };
+                    let content = &range[1..bracket_offset];
+                    let next = &range[(bracket_offset + 1)..];
+                    let mut next_chars = next.char_indices();
+                    if let Some((_, '(')) = next_chars.next() {
+                        let Some((parenthesis_offset, _)) =
+                            next_chars.skip_while(|(_, chr)| *chr != ')').next()
+                        else {
+                            todo!("error")
+                        };
+                        let to = &range[(bracket_offset + 1)..][1..parenthesis_offset];
+                        self.last += 1 + bracket_offset + parenthesis_offset + 1;
+                        return Some(MarkdownTextElement {
+                            on: content,
+                            decoration: self.decoration,
+                            kind: MarkdownPart::ExternalLink { to },
+                        });
+                    } else {
+                        self.last += 1 + bracket_offset;
+                        return Some(MarkdownTextElement {
+                            on: content,
+                            decoration: self.decoration,
+                            kind: MarkdownPart::InternalLink { to: content },
+                        });
+                    }
+                }
+                _ => {
+                    let kind = MarkdownPart::Plain;
+
+                    for (idx, chr) in range.char_indices() {
+                        if escaped {
+                            escaped = false;
+                        } else {
+                            let mut offset = idx;
+                            let current_decoration = self.decoration;
+                            let r#yield = match chr {
+                                '$' | '`' | '#' | '{' | '<' | '[' => true,
+                                '!' => range[idx..].starts_with("!["),
+                                ':' => range[idx..]
+                                    .chars()
+                                    .skip(1)
+                                    .next()
+                                    .is_some_and(char::is_alphanumeric),
+                                '_' | '*' => {
+                                    // FUTURE lots invalid here
+                                    let left = &range[idx..];
+                                    if left.starts_with("___") || left.starts_with("***") {
+                                        self.decoration ^= TextDecoration::BOLD;
+                                        self.decoration ^= TextDecoration::EMPHASIS;
+                                        offset += 3;
+                                    } else if left.starts_with("__") || left.starts_with("**") {
+                                        self.decoration ^= TextDecoration::BOLD;
+                                        offset += 2;
+                                    } else {
+                                        self.decoration ^= TextDecoration::EMPHASIS;
+                                        offset += 1;
+                                    }
+                                    true
+                                }
+                                '^' => {
+                                    self.decoration ^= TextDecoration::SUPERSCRIPT;
+                                    offset += 1;
+                                    true
+                                }
+                                '~' => {
+                                    if range[idx..].starts_with("~~") {
+                                        self.decoration ^= TextDecoration::STRIKETHROUGH;
+                                        offset += 2;
+                                    } else {
+                                        self.decoration ^= TextDecoration::SUBSCRIPT;
+                                        offset += 1;
+                                    }
+                                    true
+                                }
+                                '=' if range[idx..].starts_with("==") => {
+                                    self.decoration ^= TextDecoration::HIGHLIGHTED;
+                                    offset += 2;
+                                    true
+                                }
+                                _ => false,
+                            };
+                            if r#yield {
+                                self.last += offset;
+                                if !range[..idx].is_empty() {
+                                    return Some(MarkdownTextElement {
+                                        on: &range[..idx],
+                                        decoration: current_decoration,
+                                        kind,
+                                    });
+                                } else {
+                                    // cheeky way to jump to top
+                                    return self.next();
+                                }
+                            }
+                            escaped = chr == '\\';
+                        }
+                    }
+
+                    self.last = self.on.len();
+
+                    if !self.decoration.is_empty() {
+                        // todo!("error");
+                        eprintln!("error {:?}", self.decoration);
+                    }
+
+                    return (!range.trim().is_empty()).then_some(MarkdownTextElement {
+                        on: range.trim_end(),
+                        decoration: self.decoration,
+                        kind,
+                    });
+                }
             }
         }
     }
@@ -893,17 +817,6 @@ impl<'a> Iterator for PartsIterator<'a> {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct RawMarkdown<'a>(pub &'a str);
-
-// #[cfg(target_family = "wasm")]
-// #[wasm_bindgen]
-// impl RawMarkdown<'_> {
-//     #[must_use]
-//     #[cfg(target_family = "wasm")]
-//     #[wasm_bindgen]
-//     pub fn to_html(&self, emitter: Option<crate::extras::emit::FeatureEmitterWASM>) -> String {
-//         crate::extras::emit::markdown_to_html_string(&self.markdown_content, emitter)
-//     }
-// }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Table<'a>(pub &'a str);
@@ -920,9 +833,9 @@ impl<'a> Table<'a> {
 pub struct TableRow<'a>(pub(crate) &'a str);
 
 impl<'a> TableRow<'a> {
-    pub fn cells(&self) -> impl Iterator<Item = RawText<'a>> {
+    pub fn cells(&self) -> impl Iterator<Item = crate::RawText<'a>> {
         let inner = &self.0[1..(self.0.len() - 1)];
-        inner.split('|').map(RawText)
+        inner.split('|').map(crate::RawText)
     }
 }
 
@@ -936,44 +849,24 @@ pub struct CommandBlock<'a> {
 impl<'a> CommandBlock<'a> {
     #[must_use]
     #[allow(clippy::collapsible_else_if)]
-    pub fn arguments(&self) -> Vec<(&'a str, &'a str)> {
-        let mut arguments = Vec::new();
-        let mut key: Option<&str> = None;
-        let mut upto = 0;
-        let mut in_string = false;
+    pub fn parse_arguments(&self) -> Vec<(&'a str, &'a str)> {
+        crate::utilities::parse_arguments(self.arguments)
+    }
+}
 
-        for (idx, chr) in self.arguments.char_indices() {
-            if let Some(current_key) = key {
-                let value = self.arguments[upto..idx].trim();
-                if let (' ', false, false) = (chr, in_string, value.is_empty()) {
-                    arguments.push((current_key, value));
-                    upto = idx;
-                    key = None;
-                } else if let '"' = chr {
-                    in_string = !in_string;
-                }
-            } else {
-                if let '=' = chr {
-                    let key_acc = &self.arguments[upto..idx];
-                    key = Some(key_acc.trim());
-                    upto = idx + 1;
-                }
-            }
-        }
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct Frontmatter<'a>(pub &'a str);
 
-        if let Some(current_key) = key {
-            if in_string {
-                eprintln!("missing '\"'");
-            }
-            let value = self.arguments[upto..].trim();
-            arguments.push((current_key, value));
-        }
-
-        if !self.arguments.is_empty() && arguments.is_empty() {
-            arguments.push(("", self.arguments));
-        }
-
-        arguments
+impl<'a> Frontmatter<'a> {
+    #[cfg(feature = "yaml")]
+    pub fn parse_yaml(
+        &self,
+        cb: impl for<'b> FnMut(
+            &'b [simple_yaml_parser::YAMLKey<'a>],
+            simple_yaml_parser::RootYAMLValue<'a>,
+        ),
+    ) -> Result<(), simple_yaml_parser::YAMLParseError> {
+        simple_yaml_parser::parse(self.0, cb)
     }
 }
 
@@ -984,18 +877,8 @@ pub struct QuoteBlock<'a> {
     pub inner: &'a str,
 }
 
-fn strip_number_prefix(on: &str) -> Option<&str> {
-    if on.starts_with(|chr: char| matches!(chr, '1'..'9')) {
-        let level = on.chars().take_while(|c| matches!(*c, '1'..'9')).count();
-        on[level..].strip_prefix([')', '.'])
-    } else {
-        None
-    }
-}
-
-fn strip_surrounds<'a>(on: &'a str, left: &str, right: &str) -> Option<&'a str> {
-    on.trim()
-        .strip_prefix(left)
-        .and_then(|line| line.strip_suffix(right))
-        .map(str::trim)
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct CodeBlock<'a> {
+    pub language: &'a str,
+    pub code: &'a str,
 }

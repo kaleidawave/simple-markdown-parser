@@ -1,5 +1,6 @@
 use super::{
-    parse, parse_with_options, MarkdownElement, MarkdownParseError, ParseOptions, RawText,
+    parse, parse_with_options, MarkdownElement, MarkdownParseError, MarkdownPart,
+    MarkdownTextElement, ParseOptions, RawText, TextDecoration,
 };
 
 #[cfg(target_family = "wasm")]
@@ -15,7 +16,7 @@ pub fn parse_with_header_information<'a, T>(
 ) -> Result<(), MarkdownParseError<T>> {
     let mut header_chain = Vec::new();
     parse_with_options(on, options, 0, |element| {
-        if let MarkdownElement::Heading { level, text } = element {
+        if let MarkdownElement::Heading { level, content } = element {
             let raw_level = level as usize - 1;
             if header_chain.len() < raw_level {
                 header_chain.extend((header_chain.len()..raw_level).map(|_| RawText("")));
@@ -23,7 +24,7 @@ pub fn parse_with_header_information<'a, T>(
                 let _ = header_chain.drain(raw_level..);
             }
             let result = cb(&header_chain, element);
-            header_chain.push(text);
+            header_chain.push(content);
             result
         } else {
             cb(&header_chain, element)
@@ -42,7 +43,7 @@ pub fn parse_sections<'a>(
     let mut inner = Vec::new();
 
     let result = parse::<()>(on, |element| {
-        if let MarkdownElement::Heading { level, text } = element {
+        if let MarkdownElement::Heading { level, content } = element {
             // Run when next one begins
             {
                 cb(&header_chain, &inner);
@@ -55,7 +56,7 @@ pub fn parse_sections<'a>(
             } else {
                 let _ = header_chain.drain(raw_level..);
             }
-            header_chain.push(text);
+            header_chain.push(content);
         } else {
             inner.push(element);
         };
@@ -94,7 +95,7 @@ pub fn parse_code_blocks(
     // let mut blocks = on.split("\n").collect::<Vec<_>>();
 
     let result = parse(on, |element| {
-        if let MarkdownElement::Heading { level, text } = element {
+        if let MarkdownElement::Heading { level, content } = element {
             let mut block = std::mem::take(&mut current_block);
             if !block.code.is_empty() {
                 block.location = header_chain.iter().map(|link| link.0.to_owned()).collect();
@@ -107,16 +108,16 @@ pub fn parse_code_blocks(
             } else {
                 let _ = header_chain.drain(raw_level..);
             }
-            header_chain.push(text);
-        } else if let MarkdownElement::CodeBlock { language, code } = element {
+            header_chain.push(content);
+        } else if let MarkdownElement::CodeBlock(crate::CodeBlock { language, code }) = element {
             language.clone_into(&mut current_block.language);
             code.clone_into(&mut current_block.code);
         } else if let MarkdownElement::Paragraph(content) = element {
             current_block.information.push_str(content.0);
         } else if let MarkdownElement::Quote(content) = element {
             current_block.information.push_str(content.inner);
-        } else if let MarkdownElement::ListItem { text, .. } = element {
-            current_block.items.push(text.0.to_owned());
+        } else if let MarkdownElement::ListItem { content, .. } = element {
+            current_block.items.push(content.0.to_owned());
         }
 
         Ok(())
@@ -296,20 +297,23 @@ pub mod lexical_analysis {
         }
 
         let _result = parse::<()>(on, |element| {
-            if let Some(text) = element.inner_paragraph_raw() {
-                analyser.paragraph(text);
+            if let Some(content) = element.inner_paragraph_raw() {
+                analyser.paragraph(content);
             }
 
-            if let Some(text) = element.parts_like() {
-                for sentence in text.0.split('.') {
+            if let Some(content) = element.parts_like() {
+                for sentence in content.0.split('.') {
                     analyser.sentence(sentence);
                 }
 
-                for part in text.parts() {
-                    for word in part.no_decoration().split(&[' ', ',', '.', '!', '?']) {
-                        let word = narrow_word(word);
-                        if !word.is_empty() {
-                            analyser.word(word);
+                for part in content.parts() {
+                    // TODO links
+                    if let crate::MarkdownPart::Plain = part.kind {
+                        for word in part.on.split(&[' ', ',', '.', '!', '?']) {
+                            let word = narrow_word(word);
+                            if !word.is_empty() {
+                                analyser.word(word);
+                            }
                         }
                     }
                 }
@@ -355,10 +359,10 @@ pub mod extraction {
         let mut matching_level = 0;
 
         let end = parse::<usize>(on, |element| {
-            if let MarkdownElement::Heading { level, text } = element {
+            if let MarkdownElement::Heading { level, content } = element {
                 if start.is_some() {
-                    let text_offset = text.0.as_ptr() as usize;
-                    let diff = text_offset - on.as_ptr() as usize;
+                    let content_offset = content.0.as_ptr() as usize;
+                    let diff = content_offset - on.as_ptr() as usize;
                     let to_new_line = find_first_new_line_offset(&on[..diff]);
                     let end = diff - to_new_line;
                     match to.unwrap() {
@@ -371,15 +375,15 @@ pub mod extraction {
                             }
                         }
                         Stop::AtHeader(header_end) => {
-                            if text.0.eq_ignore_ascii_case(header_end) {
+                            if content.0.eq_ignore_ascii_case(header_end) {
                                 return Err(end);
                             }
                         }
                     }
                 } else {
-                    if text.0.eq_ignore_ascii_case(from_heading.unwrap()) {
-                        let text_offset = text.0.as_ptr() as usize;
-                        let diff = text_offset - on.as_ptr() as usize;
+                    if content.0.eq_ignore_ascii_case(from_heading.unwrap()) {
+                        let content_offset = content.0.as_ptr() as usize;
+                        let diff = content_offset - on.as_ptr() as usize;
                         let to_new_line = find_first_new_line_offset(&on[..diff]);
                         start = Some(diff - to_new_line);
                         matching_level = level;
@@ -403,18 +407,362 @@ pub mod extraction {
         }
     }
 
-    pub fn links<'a>(
-        on: &'a str,
-        cb: impl Fn(&'a str, &'a str)
-    ) {
+    pub fn links<'a>(on: &'a str, cb: impl Fn(&'a str, &'a str)) {
         parse::<usize>(on, |element| {
-            if let MarkdownElement::ListItem { text, .. } = element {
-                let parts = text.parts().collect::<Vec<_>>();
-                if let &[MarkdownTextElement::Link { on, to }] = parts.as_slice() {
-                    cb(on.0, to);
+            if let MarkdownElement::ListItem { content, .. } = element {
+                let parts = content.parts().collect::<Vec<_>>();
+                if let &[MarkdownTextElement {
+                    on,
+                    kind: crate::MarkdownPart::ExternalLink { to },
+                    decoration: _,
+                }] = parts.as_slice()
+                {
+                    cb(on, to);
                 }
             }
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
+    }
+}
+
+pub(crate) fn strip_number_prefix(on: &str) -> Option<&str> {
+    let level = on.chars().take_while(|c| matches!(*c, '1'..'9')).count();
+    if 0 < level && level < 9 {
+        on[level..].strip_prefix([')', '.'])
+    } else {
+        None
+    }
+}
+
+pub(crate) fn strip_surrounds<'a>(on: &'a str, left: &str, right: &str) -> Option<&'a str> {
+    on.trim()
+        .strip_prefix(left)
+        .and_then(|line| line.strip_suffix(right))
+        .map(str::trim)
+}
+
+pub(crate) fn strip_upto_three_spaces<'a>(on: &'a str) -> &'a str {
+    let level = on.chars().take_while(|c| matches!(*c, ' ')).count();
+    if level <= 3 {
+        &on[level..]
+    } else {
+        on
+    }
+}
+
+pub(crate) fn strip_upto_one_new_line<'a>(on: &'a str) -> &'a str {
+    if let Some(rest) = on.strip_prefix('\n') {
+        strip_upto_three_spaces(rest)
+    } else {
+        on
+    }
+}
+
+pub fn parse_arguments<'a>(on: &'a str) -> Vec<(&'a str, &'a str)> {
+    let mut arguments = Vec::new();
+    let mut key: Option<&str> = None;
+    let mut upto = 0;
+    let mut in_string = false;
+
+    for (idx, chr) in on.char_indices() {
+        if let Some(current_key) = key {
+            let value = on[upto..idx].trim();
+            if let (' ', false, false) = (chr, in_string, value.is_empty()) {
+                arguments.push((current_key, value));
+                upto = idx;
+                key = None;
+            } else if let '"' = chr {
+                in_string = !in_string;
+            }
+        } else {
+            if let '=' = chr {
+                let key_acc = &on[upto..idx];
+                key = Some(key_acc.trim());
+                upto = idx + 1;
+            }
+        }
+    }
+
+    if let Some(current_key) = key {
+        if in_string {
+            eprintln!("missing '\"'");
+        }
+        let value = on[upto..].trim();
+        arguments.push((current_key, value));
+    }
+
+    if !on.is_empty() && arguments.is_empty() {
+        arguments.push(("", on));
+    }
+
+    arguments
+}
+
+impl<'a> MarkdownElement<'a> {
+    #[must_use]
+    pub fn as_markdown(&self) -> String {
+        match self {
+            Self::Heading { level, content } => {
+                let mut s = "#".repeat(*level as usize);
+                s.push_str(content.0);
+                s.push(' ');
+                s
+            }
+            Self::ListItem {
+                level,
+                content,
+                enumerated: _,
+                checked,
+            } => {
+                // TODO enumerated
+                let mut s = "\t".repeat(*level as usize);
+                s.push_str("- ");
+                if let Some(checked) = checked {
+                    s.push_str(if *checked { "[x]" } else { "[ ]" });
+                }
+                s.push_str(content.0);
+                s
+            }
+            Self::CodeBlock(crate::CodeBlock { language, code }) => {
+                format!("```{language}\n{code}```")
+                // let mut s = "```".to_owned();
+                // s.push_str(language);
+                // s.push_str("\n");
+                // s.push_str("```");
+                // s
+            }
+            Self::Paragraph(content) => content.0.to_owned(),
+            Self::Quote(content) => content.inner.to_owned(),
+            Self::Frontmatter(frontmatter) => {
+                format!("---\n{source}---", source = frontmatter.0)
+            }
+            #[cfg(feature = "html")]
+            Self::HTMLElement { element: _, source } => source.to_string(),
+            Self::Empty => String::new(),
+            item => format!("TODO {item:?}"),
+        }
+    }
+
+    /// Paragraph content like elements
+    #[must_use]
+    pub fn inner_paragraph_raw(&self) -> Option<&str> {
+        if let MarkdownElement::Paragraph(content) = self {
+            Some(content.0)
+        } else if let MarkdownElement::Quote(content) = self {
+            // TODO these can be sometimes made up of elements
+            Some(content.inner)
+        } else {
+            None
+        }
+    }
+
+    #[must_use]
+    pub fn parts_like(&self) -> Option<RawText<'a>> {
+        if let MarkdownElement::Heading { content, .. }
+        | MarkdownElement::Paragraph(content)
+        | MarkdownElement::ListItem { content, .. } = self
+        {
+            Some(*content)
+        } else {
+            // no quote here
+            None
+        }
+    }
+
+    #[allow(clippy::match_same_arms)]
+    #[must_use]
+    pub fn debug_with_options(&self, include_content: bool) -> String {
+        use std::fmt::Write;
+
+        fn from_parts(content: &RawText<'_>) -> String {
+            let parts = content.parts().collect::<Vec<_>>();
+            if let &[MarkdownTextElement {
+                on,
+                kind: MarkdownPart::Plain,
+                decoration: TextDecoration::NONE,
+            }] = parts.as_slice()
+            {
+                format!("{on:?}")
+            } else {
+                let mut s = "[".to_owned();
+                for part in &parts {
+                    if s.len() > 1 {
+                        s.push_str(", ");
+                    }
+                    write!(&mut s, "{:?}", part.kind).unwrap();
+                    if let Some('}') = s.chars().next_back() {
+                        s.push_str(" ");
+                    }
+                    s.push_str("(");
+                    write!(&mut s, "{:?}", part.on).unwrap();
+                    if part.decoration != TextDecoration::NONE {
+                        if part.decoration.contains(TextDecoration::BOLD) {
+                            s.push_str(", bold");
+                        }
+                        if part.decoration.contains(TextDecoration::EMPHASIS) {
+                            s.push_str(", emphasised");
+                        }
+                        if part.decoration.contains(TextDecoration::HIGHLIGHTED) {
+                            s.push_str(", highlighted");
+                        }
+                        if part.decoration.contains(TextDecoration::STRIKETHROUGH) {
+                            s.push_str(", strikethrough");
+                        }
+                        if part.decoration.contains(TextDecoration::SUPERSCRIPT) {
+                            s.push_str(", superscript");
+                        }
+                        if part.decoration.contains(TextDecoration::SUBSCRIPT) {
+                            s.push_str(", subscript");
+                        }
+                    }
+                    s.push_str(")");
+                }
+                s.push_str("]");
+                s
+            }
+        }
+
+        match self {
+            MarkdownElement::Heading { level, content } => {
+                let inner = if include_content {
+                    format!(", content: {} ", from_parts(content))
+                } else {
+                    String::new()
+                };
+                format!("Heading {{ level: {level}{inner}}}")
+            }
+            MarkdownElement::Paragraph(content) => {
+                if include_content {
+                    format!("Paragraph({})", from_parts(content))
+                } else {
+                    "Paragraph".to_owned()
+                }
+            }
+            MarkdownElement::ListItem {
+                level,
+                content,
+                enumerated,
+                checked,
+            } => {
+                let inner = if include_content {
+                    format!(", content: {} ", from_parts(content))
+                } else {
+                    String::new()
+                };
+                format!("ListItem {{ level: {level}, enumerated: {enumerated:?}, checked: {checked:?}{inner}}}")
+            }
+            MarkdownElement::CodeBlock(crate::CodeBlock { language, code }) => {
+                if language.is_empty() {
+                    format!("CodeBlock {{ code: {code:?} }}", code = code.trim())
+                } else {
+                    format!(
+                        "CodeBlock {{ language: {language:?}, code: {code:?} }}",
+                        code = code.trim()
+                    )
+                }
+            }
+            MarkdownElement::Quote(crate::QuoteBlock { alert, inner }) => {
+                let inner = if include_content {
+                    let mut s = "[".to_owned();
+                    // FUTURE pass options down?
+                    let options = Default::default();
+                    let _result = crate::parse_with_options::<()>(inner, options, 1, |item| {
+                        if s.len() > 1 {
+                            s.push_str(", ");
+                        }
+                        write!(&mut s, "{}", item.debug_with_options(include_content)).unwrap();
+                        Ok(())
+                    });
+                    s.push_str("]");
+                    s
+                } else {
+                    "...".to_string()
+                };
+                if let Some(alert) = alert {
+                    format!("QuoteBlock {{ alert: {alert:?}, inner: {inner} }}")
+                } else {
+                    format!("QuoteBlock {{ inner: {inner} }}")
+                }
+            }
+            MarkdownElement::Table(table) => {
+                // TODO header?
+                let mut source = String::from("[");
+                for (idx, row) in table.rows().enumerate() {
+                    if idx != 0 {
+                        source.push_str(", ");
+                    }
+                    source.push('[');
+                    for (idx, cell) in row.cells().enumerate() {
+                        if idx != 0 {
+                            source.push_str(", ");
+                        }
+                        source.push_str(&from_parts(&cell));
+                    }
+                    source.push(']');
+                }
+                source.push(']');
+                format!("Table({source})")
+            }
+            MarkdownElement::CommandBlock(command_block) => {
+                let inner = if include_content {
+                    let mut s = "[".to_owned();
+                    // FUTURE pass options down?
+                    let options = Default::default();
+                    let _result = crate::parse_with_options::<()>(
+                        command_block.inner.0,
+                        options,
+                        1,
+                        |item| {
+                            if s.len() > 1 {
+                                s.push_str(", ");
+                            }
+                            write!(&mut s, "{}", item.debug_with_options(include_content)).unwrap();
+                            Ok(())
+                        },
+                    );
+                    s.push_str("]");
+                    s
+                } else {
+                    "...".to_string()
+                };
+                format!(
+                    "CommandBlock {{ name: {name}, arguments: {arguments:?}, inner: {inner} }}",
+                    name = command_block.name,
+                    arguments = command_block.parse_arguments()
+                )
+            }
+            #[cfg(feature = "html")]
+            MarkdownElement::HTMLElement { element, .. } => {
+                format!("HTMLElement({element:?})")
+            }
+            #[cfg(feature = "yaml")]
+            MarkdownElement::Frontmatter(frontmatter) => {
+                let mut s = "Frontmatter { ".to_owned();
+                let _ = frontmatter.parse_yaml(|key, value| {
+                    if s.len() > 14 {
+                        s.push_str(", ");
+                    }
+                    write!(&mut s, "{key:?} -> {value:?}").unwrap();
+                });
+                s.push_str(" }");
+                s
+            }
+            // rest
+            item => format!("{item:?}"),
+        }
+    }
+}
+
+impl<'a> RawText<'a> {
+    #[must_use]
+    pub fn no_decoration(&self) -> String {
+        let mut s = String::new();
+        for part in crate::PartsIterator::new(self.0) {
+            if let crate::MarkdownPart::Plain = part.kind {
+                s.push_str(part.on);
+            }
+        }
+        s
     }
 }

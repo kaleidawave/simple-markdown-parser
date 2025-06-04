@@ -1,12 +1,38 @@
 # Markdown
 
-This document is a list of all markdown features
+This document is a list of all *markdown* features supported in the parser.
+
+This mostly supports [commonmark](https://spec.commonmark.org/current/) (0.31.2 at the time of writing) [there are some things missing](https://github.com/kaleidawave/simple-markdown-parser/issues/3).
+
+This is based on features supported by
+- [GitHub](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax)
+- [Markdoc](https://markdoc.dev/docs/syntax)
+- [Obsidian](https://help.obsidian.md/obsidian-flavored-markdown)
+
+Specifically these are supported extensions
+- Tables
+- Internal links (with block references)
+- Comments (markdown)
+- HTML elements
+- List task checkboxes
+- Strikethroughs
+- Highlights
+- Callouts / alerts
+
+%%
+- Footnotes
+%%
+
+> The output uses a custom `Debug` implementation to fully explore the parse output. See the documentation for the actual structure produced by the parser
+> The returned text is based on `&str` referencing of the parse input.
 
 ## Elements
 
-These are *top level items* not nested items
+These are *top level items* in the document. These represent structural modifications, as apposed to individual styling.
 
 ### Headings
+
+> [ATX Headings](https://spec.commonmark.org/0.31.2/#atx-headings)
 
 Headings are specified by starting the line with the `#` symbol. More `#`s is a higher *depth*
 
@@ -14,15 +40,40 @@ Headings are specified by starting the line with the `#` symbol. More `#`s is a 
 # Hi
 ## Hello
 ### Hiya
+
+#not a heading
 ```
 
 ```
-Heading { level: 1, parts: ["Hi"] }
-Heading { level: 1, parts: ["Hi"] }
-Heading { level: 1, parts: ["Hi"] }
+Heading { level: 1, content: "Hi" }
+Heading { level: 2, content: "Hello" }
+Heading { level: 3, content: "Hiya" }
+Empty
+Paragraph([Tag("not"), Plain(" a heading")])
 ```
 
-> There are no level 7 headings?
+> There are no level 7 headings
+> Headings require a space between the `#` and content
+
+#### Underscore headings
+
+> [Setext Headings](https://spec.commonmark.org/0.31.2/#setext-headings)
+
+```md
+Hello
+---
+
+Text here
+```
+
+```
+Heading { level: 1, content: "Hello" }
+Empty
+Empty
+Paragraph("Text here")
+```
+
+> Not sure why there are two empty lines?
 
 ### Paragraphs
 
@@ -30,12 +81,52 @@ Any *undecorated* content is considered paragraphs. Line breaks are considered *
 
 ```md
 This is text in a paragraph
+```
+
+```
+Paragraph("This is text in a paragraph")
+```
+
+#### Split paragraphs
+
+```md
+This is text
+
+Another paragraph
+```
+
+```
+Paragraph("This is text")
+Empty
+Paragraph("Another paragraph")
+```
+
+> Does there need to be an `Empty` here
+
+#### Grouped paragraphs
+
+```md
+This is text in a paragraph
 And another one
 ```
 
 ```
-Paragraph { parts: ["This is text in a paragraph"] }
-Paragraph { parts: ["And another one"] }
+Paragraph("This is text in a paragraph\r\nAnd another one")
+```
+
+#### Continued paragraphs
+
+While by default the lines will be split a part. If the content ends with a backslash, the content will be continued
+
+> [See](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax#line-breaks)
+
+```md
+This is text \
+in a paragraph
+```
+
+```
+Paragraph("This is text \\\r\nin a paragraph")
 ```
 
 ### Lists
@@ -48,9 +139,13 @@ Items can be visually *grouped* as a with `-`
 ```
 
 ```
+ListItem { level: 0, enumerated: false, checked: None, content: "something" }
+ListItem { level: 0, enumerated: false, checked: None, content: "another thing" }
 ```
 
 #### Nesting
+
+Using tab indentation we can add nest lists under lists
 
 ```md
 - something
@@ -61,12 +156,24 @@ Items can be visually *grouped* as a with `-`
 	- y
 ```
 
+> The implementation is that each list item has a `depth` property
+
 ```
+ListItem { level: 0, enumerated: false, checked: None, content: "something" }
+ListItem { level: 1, enumerated: false, checked: None, content: "another thing" }
+ListItem { level: 2, enumerated: false, checked: None, content: "z" }
+ListItem { level: 0, enumerated: false, checked: None, content: "Something" }
+ListItem { level: 1, enumerated: false, checked: None, content: "x" }
+ListItem { level: 1, enumerated: false, checked: None, content: "y" }
 ```
 
-> TODO invalid syntax here
+%%
+Could test invalid syntax here
+%%
 
 #### Enumerating
+
+We can prefix with increasing numerals for enumerated lists
 
 ```md
 1. Hi
@@ -75,16 +182,21 @@ Items can be visually *grouped* as a with `-`
 ```
 
 ```
+ListItem { level: 0, enumerated: true, checked: None, content: "Hi" }
+ListItem { level: 0, enumerated: true, checked: None, content: "Something" }
+ListItem { level: 0, enumerated: true, checked: None, content: "X" }
 ```
 
 #### Checkboxes
 
 ```md
 - [x] Write specification
-- [ ] complete tests
+- [ ] Complete tests
 ```
 
 ```
+ListItem { level: 0, enumerated: false, checked: Some(true), content: "Write specification" }
+ListItem { level: 0, enumerated: false, checked: Some(false), content: "Complete tests" }
 ```
 
 #### Prefixes
@@ -97,11 +209,13 @@ Items can be visually *grouped* as a with `-`
 ```
 
 ```
+ListItem { level: 0, enumerated: false, checked: None, content: "hi" }
+ListItem { level: 0, enumerated: false, checked: None, content: "hello" }
 ```
 
 ### Code blocks
 
-We can have blocks of literal content / code using triple (or more) backticks ```` ``` ````. 
+We can have blocks of literal content / code using triple (or more) backticks ```` ``` ````.
 
 > Also nested (META!). 
 
@@ -112,7 +226,7 @@ code here
 ````
 
 ```
-Code { language: "", code: "" }
+CodeBlock { code: "code here" }
 ```
 
 #### Languages
@@ -124,10 +238,10 @@ const x = 2;
 ````
 
 ```
-Code { language: "js", code: "" }
+CodeBlock { language: "js", code: "const x = 2;" }
 ```
 
-### LaTeX / Math blocks
+### Mathematics blocks
 
 We can have blocks of *mathematical* notation 
 
@@ -138,20 +252,26 @@ $$
 ```
 
 ```
-Mathematics { content: "y=\sin x" }
+BlockMathematics { script: "y=\\sin x" }
 ```
 
-> This is expected to go through a LaTeX or equivalent compiler
+> This is expected to go through a $LaTeX$ or equivalent compiler
 
 ### Quotes
 
-> Nested here
+Prefixing with a item with `RIGHT-POINTING ANGLE BRACKET` marks the content as being quoted. Typically these are indented and have a colored left border emphasising and ra a block from 
 
 ```md
 > Hello
 ```
 
+```
+QuoteBlock { inner: [Paragraph("Hello")] }
+```
+
 #### Nesting
+
+Content can be nested inside of quote blocks. It is important to note that this is **top-level** markdown and so can contain headers and even more quote blocks. Consequitive code blocks and combined in the end result
 
 ```md
 > # Hello
@@ -160,9 +280,43 @@ Mathematics { content: "y=\sin x" }
 ```
 
 ```
+QuoteBlock { inner: [Heading { level: 1, content: "Hello" }, Paragraph("something"), QuoteBlock { inner: [Paragraph("a quote in a quote")] }] }
+```
+
+#### Alerts
+
+These are prefixes that can be added to quote blocks which relate to some custom stying and icon-age.
+
+> First introduced by [GitHub](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax#alerts)
+
+```md
+> [!NOTE]
+> Useful information that users should know, even when skimming content.
+
+> [!TIP]
+> Helpful advice for doing things better or more easily.
+
+> [!IMPORTANT]
+> Key information users need to know to achieve their goal.
+
+> [!WARNING]
+> Urgent info that needs immediate user attention to avoid problems.
+
+> [!CAUTION]
+> Advises about risks or negative outcomes of certain actions.
+```
+
+```
+QuoteBlock { alert: "NOTE", inner: [Paragraph("Useful information that users should know, even when skimming content.")] }
+QuoteBlock { alert: "TIP", inner: [Paragraph("Helpful advice for doing things better or more easily.")] }
+QuoteBlock { alert: "IMPORTANT", inner: [Paragraph("Key information users need to know to achieve their goal.")] }
+QuoteBlock { alert: "WARNING", inner: [Paragraph("Urgent info that needs immediate user attention to avoid problems.")] }
+QuoteBlock { alert: "CAUTION", inner: [Paragraph("Advises about risks or negative outcomes of certain actions.")] }
 ```
 
 ### Tables
+
+Tables can be constructed in markdown through the use of delimiting cells with `|`. The table head is broken by a row or `| --- |` cells.
 
 ```md
 | col1 | col2 |
@@ -172,6 +326,21 @@ Mathematics { content: "y=\sin x" }
 ```
 
 ```
+Table([["col1", "col2"], ["something", "another"], ["x", "y"]])
+```
+
+
+#### Styling in tables
+
+```md
+| col1 | col2 |
+| --- | --- |
+| $something$ | another |
+| x | **y** |
+```
+
+```
+Table([["col1", "col2"], [[InlineMathematics("something")], "another"], ["x", [Plain("y", bold)]]])
 ```
 
 ### Horizontal rule
@@ -180,6 +349,7 @@ A rule. Can be used to divide up content
 
 ```md
 some text
+
 ---
 more text
 ```
@@ -187,9 +357,15 @@ more text
 > We have to have text here because otherwise it is treated as a frontmatter :/
 
 ```
+Paragraph("some text")
+Empty
+HorizontalRule
+Paragraph("more text")
 ```
 
 ### Footnotes
+
+> [See](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax#footnotes)
 
 > TODO
 
@@ -203,11 +379,84 @@ some comment
 ```
 
 ```
+Paragraph("Some text")
+CommentBlock("some comment")
 ```
+
+### Frontmatter
+
+> The parsing can be left to the user. But with the `yaml` feature [simple-yaml-parser](https://crates.io/crates/simple-yaml-parser) can be used to generate the below
+
+```md
+---
+property: front_of_document
+author:
+	name: "Ben"
+---
+
+Content
+```
+
+```
+Frontmatter { [Slice("property")] -> String("front_of_document"), [Slice("author"), Slice("name")] -> String("\"Ben\"") }
+Empty
+Paragraph("Content")
+```
+
+> Waiting for a fix 
+
+### Command blocks / custom blocks
+
+> Called *tags* in [markdoc](https://markdoc.dev/docs/tags)
+
+#### Inline
+
+```md
+{% image width=40 /%}
+```
+
+```
+CommandBlock { name: image, arguments: [("width", "40")], inner: [] }
+```
+
+#### Blocks
+
+```md
+{% if true %}
+Something here
+{% /if %}
+```
+
+```
+CommandBlock { name: if, arguments: [("", "true")], inner: [Empty, Paragraph("Something here")] }
+```
+
+> `Empty` should not be there
 
 ## Styling
 
 These are inline elements
+
+There are blocks inside markdown
+- Links
+- Text
+
+These can be decorated, but whose decoration be altered until finished. The decoration may or may not apply to the item
+- Code
+- Mathematics
+- Tags (from Obsidian)
+- Interpolations
+- Emoji
+
+The rest is considered regular text, but can be styled with the following. These are binary, e.g. you cannot have double bold
+- Emphasis (italic)
+- Bold
+- Crossout
+- Highlight
+- Superscript
+- Subscript
+
+> No underlines, colors
 
 ### HTML elements
 
@@ -220,26 +469,47 @@ We have some `code` here
 ```
 
 ```
+Paragraph([Plain("We have some "), InlineCode("code"), Plain(" here")])
 ```
 
 #### Nesting
 
-We 
+We can use backticks in `code` by wrapping the whole thing in more backticks
 
 ```md
 `` `hi` ``
 ```
 
+> Currently trimmed
+
 ```
+Paragraph([InlineCode("`hi`")])
 ```
 
-### Emphasis / italic
+> Unfortuantly, I don't think we can remove the spaces here?
+
+#### Escaping
+
+We can use backticks in regular markdown by escaping the content with a backslash. `\`
+
+```md
+My favorite character: \` the backtick
+```
+
+```
+Paragraph("My favorite character: \\` the backtick")
+```
+
+### Emphasis
+
+> This corresponds to the `<em>` tag which italicizes text
 
 ```md
 This is *emphasised* text
 ```
 
 ```
+Paragraph([Plain("This is "), Plain("emphasised", emphasised), Plain(" text")])
 ```
 
 ### Bold
@@ -249,87 +519,166 @@ This is **bold** text
 ```
 
 ```
+Paragraph([Plain("This is "), Plain("bold", bold), Plain(" text")])
 ```
 
-#### Bold in italics
+#### Bold in emphasis
 
-### Links (all of them)
+```md
+This is **bold and _emphasised_** text
+```
+
+```
+Paragraph([Plain("This is "), Plain("bold and ", bold), Plain("emphasised", bold, emphasised), Plain(" text")])
+```
+
+#### Bold and emphasised
+
+```md
+This is ***bold and emphasised*** text
+```
+
+```
+Paragraph([Plain("This is "), Plain("bold and emphasised", bold, emphasised), Plain(" text")])
+```
+
+#### Bold in code
+
+```md
+This is **bold `return 0`** text
+```
+
+```
+Paragraph([Plain("This is "), Plain("bold ", bold), InlineCode("return 0", bold), Plain(" text")])
+```
+
+### Links
+
+Text can be linked. The content is given in square brackets `[...]` followed by a reference in parenthesis `(...)`.
 
 ```md
 [title](https://google.com)
 ```
 
 ```
+Paragraph([ExternalLink { to: "https://google.com" } ("title")])
 ```
 
-### LaTeX
+#### Styles in links
+
+The content/text of a link can have styles
 
 ```md
-Euler's criterion $\left({\frac{a}{p}}\right)\equiv a^{\tfrac {p-1}{2}}{\pmod {p}}$
+[something *here*](https://google.com)
 ```
 
 ```
+Paragraph([ExternalLink { to: "https://google.com" } ("something *here*")])
+```
+
+#### Internal links
+
+```md
+[#x]
+```
+
+```
+Paragraph([InternalLink { to: "#x" } ("#x")])
+```
+
+#### Media links
+
+> Here the text content becomes its [`alt` text](https://developer.mozilla.org/en-US/docs/Web/API/HTMLImageElement/alt)
+
+![...](https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExeHhzc2tuNmFlcHNnMWRyNG1jNzlkMXA3andraGRvZDh2MzJ4cXJvcSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/SwpQtSRf8Ekby5IsTw/giphy.gif)
+
+```md
+![...](https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExeHhzc2tuNmFlcHNnMWRyNG1jNzlkMXA3andraGRvZDh2MzJ4cXJvcSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/SwpQtSRf8Ekby5IsTw/giphy.gif)
+```
+
+```
+Paragraph([MediaLink { source: "https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExeHhzc2tuNmFlcHNnMWRyNG1jNzlkMXA3andraGRvZDh2MzJ4cXJvcSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/SwpQtSRf8Ekby5IsTw/giphy.gif" } ("...")])
+```
+
+#### Chevron links
+
+```md
+Link to <https://github.com/kaleidawave/benchmarks>
+```
+
+```
+Paragraph([Plain("Link to "), ExternalLink { to: "https://github.com/kaleidawave/benchmarks" } ("https://github.com/kaleidawave/benchmarks")])
+```
+
+
+### Inline mathematics
+
+Similar to [#block-mathematics] we have inline mathematics
+
+```md
+Euler's criterion $\left({\frac{a}{p}}ight)\equiv a^{\tfrac {p-1}{2}}{\pmod {p}}$ a formula for determining whether an integer is a quadratic residue modulo a prime
+```
+
+```
+Paragraph([Plain("Euler's criterion "), InlineMathematics("\\left({\\frac{a}{p}}ight)\\equiv a^{\\tfrac {p-1}{2}}{\\pmod {p}}"), Plain(" a formula for determining whether an integer is a quadratic residue modulo a prime")])
 ```
 
 ### Strikethrough
+
+Two tildas `~` cross out certain text.
 
 ```md
 ~~cross this out~~
 ```
 
 ```
+Paragraph([Plain("cross this out", strikethrough)])
 ```
 
 ### Tags
 
-> This is based of an Obsidian feature
+> This is [based of an Obsidian feature](https://help.obsidian.md/tags)
 
 ```md
 We can #tag this
 ```
 
 ```
+Paragraph([Plain("We can "), Tag("tag"), Plain(" this")])
 ```
 
 ### Emoji
 
 ```md
-We can :smile:
+I hope this works :smile:
 ```
 
 ```
+Paragraph([Plain("I hope this works "), Emoji("smile")])
 ```
 
 ### Superscript and subscript
 
 ```md
-The 16^th of November
+The 16^th^ of November
+
+Ozone layer O~3~
 ```
 
 ```
+Paragraph([Plain("The 16"), Plain("th", superscript), Plain(" of November")])
+Empty
+Paragraph([Plain("Ozone layer O"), Plain("3", subscript)])
 ```
 
-## Others
+### Interpolation
 
-### Frontmatter
-
-> The parsing of the content is left to the user. Can I recommend [simple-yaml-parser](https://crates.io/crates/simple-yaml-parser)?
+> For supporting MDX
 
 ```md
----
-property: front_of_document
----
-
-Content
+The day is {date}.
 ```
 
 ```
+Paragraph([Plain("The day is "), Interpolation("date"), Plain(".")])
 ```
-
-### Custom blocks
-
-> #TODO Stripe..? 
-
-### Comments
-
-> #TODO

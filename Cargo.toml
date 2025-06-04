@@ -14,16 +14,20 @@ name = "markdown-query"
 path = "./examples/query.rs"
 
 [features]
+default = ["yaml"]
 extras = []
 utilities = []
-html = ["dep:lightml"]
+# For frontmatter
+yaml = ["dep:simple-yaml-parser"]
+# FUTURE html = ["dep:lightml"] 
+html = []
 
 [dependencies]
-lightml.version = "*"
-lightml.optional = true
-lightml.branch = "fixes1"
-lightml.git = "https://github.com/kaleidawave/lightml"
-lightml.features = ["markdown_code_blocks_in_html"]
+# lightml.version = "*", lightml.optional = true, lightml.branch = "fixes1", lightml.git = "https://github.com/kaleidawave/lightml", lightml.features = ["markdown_code_blocks_in_html"]
+
+simple-yaml-parser.version = "*"
+simple-yaml-parser.optional = true
+# simple-yaml-parser.branch = "fixes1", simple-yaml-parser.git = "https://github.com/kaleidawave/simple-yaml-parser"
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 wasm-bindgen = "0.2"

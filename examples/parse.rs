@@ -26,52 +26,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .to_owned()
     };
 
-    fn handler(item: simple_markdown_parser::MarkdownElement, indent: usize) -> Result<(), ()> {
-        if let simple_markdown_parser::MarkdownElement::CommandBlock(block) = item {
-            eprint!(
-                "MarkdownElement::CommandBlock {{ name: {name:?}, arguments: {arguments:?} }}",
-                name = block.name,
-                arguments = block.arguments()
-            );
-            if !block.inner.0.is_empty() {
-                let options = simple_markdown_parser::ParseOptions::default();
-                eprintln!(" [");
-                let _ =
-                    simple_markdown_parser::parse_with_options(block.inner.0, options, 0, |item| {
-                        handler(item, indent + 1)
-                    });
-                eprint!("] End of {name:?}", name = block.name);
-            }
-            eprintln!();
-        } else {
-            for _ in 0..indent {
-                eprint!("\t");
-            }
-            if let Some(parts) = item.parts_like() {
-                eprint!("{} -> ", item.debug_without_text());
-                eprintln!(
-                    "parts={inner:?}",
-                    inner = parts
-                        .parts()
-                        .flat_map(|part| match part {
-                            simple_markdown_parser::MarkdownTextElement::Link { on, .. } => {
-                                on.parts().collect::<Vec<_>>()
-                            }
-                            part => vec![part],
-                        })
-                        .collect::<Vec<_>>()
-                );
-            } else {
-                eprintln!("{:?}", item);
-            }
-        }
-
+    fn handler(item: simple_markdown_parser::MarkdownElement) -> Result<(), ()> {
+        eprintln!("{}", item.debug_with_options(true));
         Ok(())
     }
 
-    let options = simple_markdown_parser::ParseOptions::default();
+    let mut options = simple_markdown_parser::ParseOptions::default();
+    options.heading_underscores = true;
     let result = simple_markdown_parser::parse_with_options(content.as_str(), options, 0, |item| {
-        handler(item, 0)
+        handler(item)
     });
 
     match result {

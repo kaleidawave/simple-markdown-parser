@@ -32,7 +32,12 @@ pub fn markdown_to_html(
 ) -> Result<(), MarkdownParseError<()>> {
     let mut last_was_list_item: Option<&'static str> = None;
     crate::parse_with_options::<()>(source, options, quote_depth, |item| {
-        let is_list_item = if let MarkdownElement::ListItem { enumerated, checked: _, .. } = item {
+        let is_list_item = if let MarkdownElement::ListItem {
+            enumerated,
+            checked: _,
+            ..
+        } = item
+        {
             Some(if enumerated { "ol" } else { "ul" })
         } else {
             None
@@ -203,10 +208,10 @@ pub fn element_to_html(
     item: MarkdownElement,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match item {
-        MarkdownElement::Heading { level, text } => {
+        MarkdownElement::Heading { level, content } => {
             assert!(level < 7, "heading level too much for HTML");
             writeln!(out, "<h{level}>")?;
-            inner_to_html(out, emitter, text)?;
+            inner_to_html(out, emitter, content)?;
             writeln!(out, "</h{level}>")?;
         }
         MarkdownElement::Quote(block) => {
@@ -225,24 +230,24 @@ pub fn element_to_html(
             markdown_to_html(block.inner, out, emitter, options, quote_depth + 1).unwrap();
             writeln!(out, "</blockquote")?;
         }
-        MarkdownElement::Paragraph(text) => {
-            if text.0.starts_with("![") || text.0.starts_with("[![") {
+        MarkdownElement::Paragraph(content) => {
+            if content.0.starts_with("![") || content.0.starts_with("[![") {
                 // Don't wrap media in `<p>`
-                inner_to_html(out, emitter, text)?;
+                inner_to_html(out, emitter, content)?;
             } else {
                 writeln!(out, "<p>")?;
-                inner_to_html(out, emitter, text)?;
+                inner_to_html(out, emitter, content)?;
                 writeln!(out, "</p>")?;
             }
         }
         MarkdownElement::ListItem {
             level: _level,
-            text,
+            content,
             enumerated: _,
-            checked: _
+            checked: _,
         } => {
             writeln!(out, "<li>")?;
-            inner_to_html(out, emitter, text)?;
+            inner_to_html(out, emitter, content)?;
             writeln!(out, "</li>")?;
         }
         // TODO test
@@ -269,15 +274,15 @@ pub fn element_to_html(
             writeln!(out, "</tbody>")?;
             writeln!(out, "</table>")?;
         }
-        MarkdownElement::CodeBlock { language, code } => {
+        MarkdownElement::CodeBlock(crate::CodeBlock { language, code }) => {
             let inner = emitter.code_block(language, code);
             writeln!(out, "<pre>{inner}</pre>")?;
         }
-        MarkdownElement::LaTeXBlock { script: _ } => {}
+        MarkdownElement::BlockMathematics { script: _ } => {}
         // TODO at start?
         MarkdownElement::Frontmatter(inner) => {
             // TODO temp
-            writeln!(out, "<pre class=\"frontmatter\">{inner}</pre>")?;
+            writeln!(out, "<pre class=\"frontmatter\">{}</pre>", inner.0)?;
         }
         MarkdownElement::HorizontalRule => {
             writeln!(out, "<hr>")?;
@@ -285,7 +290,7 @@ pub fn element_to_html(
         MarkdownElement::CommandBlock(command) => {
             emitter.command(
                 command.name,
-                command.arguments(),
+                command.parse_arguments(),
                 command.inner.0,
                 options,
                 out,
@@ -348,51 +353,53 @@ pub fn element_to_html(
 pub fn inner_to_html(
     out: &mut impl Write,
     emitter: &impl FeatureEmitter,
-    text: RawText,
+    content: RawText,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    for part in text.parts() {
-        text_element_to_html(out, emitter, part)?;
+    for part in content.parts() {
+        content_element_to_html(out, emitter, part)?;
     }
     Ok(())
 }
 
 #[allow(clippy::match_same_arms)]
-pub fn text_element_to_html(
+#[allow(unused, unreachable_code)]
+pub fn content_element_to_html(
     out: &mut impl Write,
     emitter: &impl FeatureEmitter,
     item: MarkdownTextElement,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    match item {
-        MarkdownTextElement::Plain(content) => write!(out, "{content}")?,
-        MarkdownTextElement::Bold(content) => write!(out, "<strong>{content}</strong>")?,
-        MarkdownTextElement::Italic(content) => write!(out, "<em>{content}</em>")?,
-        MarkdownTextElement::BoldAndItalic(content) => {
-            write!(out, "<strong><em>{content}</em></strong>")?;
-        }
-        MarkdownTextElement::Code(content) => write!(out, "<code>{content}</code>")?,
-        MarkdownTextElement::StrikeThrough(content) => write!(out, "{content}")?,
-        MarkdownTextElement::Emoji(content) => write!(out, "{content}")?,
-        MarkdownTextElement::Latex(content) => write!(out, "{content}")?,
-        MarkdownTextElement::Highlight(content) => write!(out, "{content}")?,
-        MarkdownTextElement::Subscript(content) => write!(out, "{content}")?,
-        MarkdownTextElement::Superscript(content) => write!(out, "{content}")?,
-        MarkdownTextElement::Tag(content) => write!(
-            out,
-            "<span style=\"background-color: red; color: white\">#{content}</span>"
-        )?,
-        MarkdownTextElement::Media { alt, source } => {
-            // TODO videos?
-            write!(out, "<img alt=\"{alt}\" src=\"{source}\">")?;
-        }
-        MarkdownTextElement::Expression(item) => {
-            write!(out, "{result}", result = emitter.interpolation(item))?;
-        }
-        MarkdownTextElement::Link { on, to } => {
-            write!(out, "<a href=\"{to}\">")?;
-            inner_to_html(out, emitter, on)?;
-            write!(out, "</a>")?;
-        }
-    };
+    todo!();
+    // match item {
+    //     MarkdownTextElement::Plain(content) => write!(out, "{content}")?,
+    //     MarkdownTextElement::Bold(content) => write!(out, "<strong>{content}</strong>")?,
+    //     MarkdownTextElement::Italic(content) => write!(out, "<em>{content}</em>")?,
+    //     MarkdownTextElement::BoldAndItalic(content) => {
+    //         write!(out, "<strong><em>{content}</em></strong>")?;
+    //     }
+    //     MarkdownTextElement::Code(content) => write!(out, "<code>{content}</code>")?,
+    //     MarkdownTextElement::StrikeThrough(content) => write!(out, "{content}")?,
+    //     MarkdownTextElement::Emoji(content) => write!(out, "{content}")?,
+    //     MarkdownTextElement::InlineMathematics(content) => write!(out, "{content}")?,
+    //     MarkdownTextElement::Highlight(content) => write!(out, "{content}")?,
+    //     MarkdownTextElement::Subscript(content) => write!(out, "{content}")?,
+    //     MarkdownTextElement::Superscript(content) => write!(out, "{content}")?,
+    //     MarkdownTextElement::Tag(content) => write!(
+    //         out,
+    //         "<span style=\"background-color: red; color: white\">#{content}</span>"
+    //     )?,
+    //     MarkdownTextElement::Media { alt, source } => {
+    //         // TODO videos?
+    //         write!(out, "<img alt=\"{alt}\" src=\"{source}\">")?;
+    //     }
+    //     MarkdownTextElement::Expression(item) => {
+    //         write!(out, "{result}", result = emitter.interpolation(item))?;
+    //     }
+    //     MarkdownTextElement::Link { on, to } => {
+    //         write!(out, "<a href=\"{to}\">")?;
+    //         inner_to_html(out, emitter, on)?;
+    //         write!(out, "</a>")?;
+    //     }
+    // };
 
     Ok(())
 }

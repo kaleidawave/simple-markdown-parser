@@ -2,17 +2,18 @@ use simple_markdown_parser::{parse, MarkdownElement};
 
 fn as_lines(content: &str) -> String {
     use std::fmt::Write;
-    
+
     let mut buf = String::new();
-    let options = simple_markdown_parser::ParseOptions::default();
+    // TODO specify by flags
+    let options = simple_markdown_parser::ParseOptions {
+        allow_asterisk_and_plus_as_list_prefixes: true,
+        heading_underscores: true,
+    };
     let result = simple_markdown_parser::parse_with_options::<()>(content, options, 0, |item| {
-        writeln!(buf, "{item:?}").unwrap();
+        writeln!(buf, "{item}", item = item.debug_with_options(true)).unwrap();
         Ok(())
     });
     buf
-    // let mut reader = Lexer::new(content);
-    // let result = Document::from_reader(&mut reader);
-    // format!("{result:#?}")
 }
 
 fn main() {
@@ -58,6 +59,7 @@ fn main() {
 
 #[derive(Debug, Default)]
 struct Test {
+    section: String,
     name: String,
     options: (),
     case: String,
@@ -67,23 +69,34 @@ struct Test {
 fn get_tests() -> Vec<Test> {
     let mut tests: Vec<Test> = Vec::new();
     let mut current_test = Test::default();
-    let result = parse::<()>(include_str!("./specification.md"), |element| {
-        if let MarkdownElement::Heading { level: 3, text } = element {
-            if !current_test.case.is_empty() {
-                tests.push(std::mem::take(&mut current_test));
+    let mut section = String::new();
+    let result = parse::<()>(include_str!("../tests/specification.md"), |element| {
+        if let MarkdownElement::Heading { level, content } = element {
+            if level >= 3 {
+                if !current_test.case.is_empty() {
+                    tests.push(std::mem::take(&mut current_test));
+                }
+                current_test.name = content.no_decoration();
+                section.clone_into(&mut current_test.section);
+            } else {
+                section = content.no_decoration();
             }
-            current_test.name = text.no_decoration();
         } else if let MarkdownElement::Paragraph(_content) = element {
             // if content.0.ends_with("`top_level_separator = Some(\"\\n\")`") {
             //     current_test.options.top_level_separator = Some("\n");
             // }
-        } else if let MarkdownElement::CodeBlock { code, .. } = element {
+        } else if let MarkdownElement::CodeBlock(simple_markdown_parser::CodeBlock {
+            code, ..
+        }) = element
+        {
             if current_test.case.is_empty() {
                 code.clone_into(&mut current_test.case);
             } else if current_test.output.is_empty() {
                 code.clone_into(&mut current_test.output);
             } else {
-                panic!("Another code block")
+                let next_name = format!("{} *", current_test.name);
+                tests.push(std::mem::take(&mut current_test));
+                current_test.name = next_name;
             }
         }
         Ok(())
