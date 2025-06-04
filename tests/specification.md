@@ -2,7 +2,7 @@
 
 This document is a list of all *markdown* features supported in the parser.
 
-This mostly supports [commonmark](https://spec.commonmark.org/current/) (0.31.2 at the time of writing) [there are some things missing](https://github.com/kaleidawave/simple-markdown-parser/issues/3).
+This mostly supports [commonmark](https://spec.commonmark.org/current/) (0.31.2 at the time of writing). [There are some things missing](https://github.com/kaleidawave/simple-markdown-parser/issues/3).
 
 This is based on features supported by
 - [GitHub](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax)
@@ -255,7 +255,7 @@ $$
 BlockMathematics { script: "y=\\sin x" }
 ```
 
-> This is expected to go through a $LaTeX$ or equivalent compiler
+> This is expected to go through a `LaTeX` or equivalent compiler
 
 ### Quotes
 
