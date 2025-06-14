@@ -234,7 +234,7 @@ pub fn element_to_html(
                 .unwrap();
             } else {
                 write!(out, ">")?;
-            };
+            }
             markdown_to_html(block.inner, out, emitter, options, quote_depth + 1).unwrap();
             writeln!(out, "</blockquote>")?;
         }
@@ -284,7 +284,10 @@ pub fn element_to_html(
         }
         MarkdownElement::CodeBlock(crate::CodeBlock { language, code }) => {
             let inner = emitter.code_block(language, code);
-            writeln!(out, "<pre data-language=\"{language}\">{inner}</pre>")?;
+            writeln!(
+                out,
+                "<pre data-language=\"{language}\"><code>{inner}</code></pre>"
+            )?;
         }
         MarkdownElement::BlockMathematics { script } => {
             writeln!(
@@ -292,11 +295,6 @@ pub fn element_to_html(
                 "<p class=\"mathematics block\">{inner}</p>",
                 inner = emitter.mathematics(script, true)
             )?;
-        }
-        // TODO at start?
-        MarkdownElement::Frontmatter(inner) => {
-            // TODO temp
-            writeln!(out, "<pre class=\"frontmatter\">{}</pre>", inner.0)?;
         }
         MarkdownElement::HorizontalRule => {
             writeln!(out, "<hr>")?;
@@ -310,8 +308,13 @@ pub fn element_to_html(
                 out,
             );
         }
-        // MarkdownElement::Footnote => {}
-        MarkdownElement::CommentBlock(_) | MarkdownElement::Empty => {}
+        MarkdownElement::HTMLElement(html) => {
+            writeln!(out, "{content}", content = html.0)?;
+        }
+        // writeln!(out, "<pre class=\"frontmatter\">{}</pre>", inner.0)?;
+        MarkdownElement::Frontmatter(_)
+        | MarkdownElement::CommentBlock(_)
+        | MarkdownElement::Empty => {}
     }
     // #[cfg(feature = "html")]
     // MarkdownElement::HTMLElement { source: _, element } => {
@@ -415,7 +418,7 @@ pub fn inner_to_html(
         match kind {
             MarkdownPart::Plain => write!(out, "{on}", on = escape_string_content(on))?,
             MarkdownPart::InlineCode => {
-                write!(out, "<code>{on}</code>", on = escape_string_content(on))?
+                write!(out, "<code>{on}</code>", on = escape_string_content(on))?;
             }
             MarkdownPart::InlineMathematics => write!(
                 out,
@@ -442,6 +445,7 @@ pub fn inner_to_html(
                 "<a href=\"#{to}\">{on}</a>",
                 on = escape_string_content(on)
             )?,
+            MarkdownPart::HTMLElement => write!(out, "{on}")?,
         }
         current = decoration;
     }

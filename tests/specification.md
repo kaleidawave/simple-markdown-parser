@@ -5,11 +5,13 @@ This document is a list of all *markdown* features supported in the parser.
 This mostly supports [commonmark](https://spec.commonmark.org/current/) (0.31.2 at the time of writing). [There are some things missing](https://github.com/kaleidawave/simple-markdown-parser/issues/3).
 
 This is based on features supported by
+
 - [GitHub](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax)
 - [Markdoc](https://markdoc.dev/docs/syntax)
 - [Obsidian](https://help.obsidian.md/obsidian-flavored-markdown)
 
 Specifically these are supported extensions
+
 - Tables
 - Internal links (with block references)
 - Comments (markdown)
@@ -48,7 +50,6 @@ Headings are specified by starting the line with the `#` symbol. More `#`s is a 
 Heading { level: 1, content: "Hi" }
 Heading { level: 2, content: "Hello" }
 Heading { level: 3, content: "Hiya" }
-Empty
 Paragraph([Tag("not"), Plain(" a heading")])
 ```
 
@@ -68,12 +69,8 @@ Text here
 
 ```
 Heading { level: 1, content: "Hello" }
-Empty
-Empty
 Paragraph("Text here")
 ```
-
-> Not sure why there are two empty lines?
 
 ### Paragraphs
 
@@ -97,11 +94,8 @@ Another paragraph
 
 ```
 Paragraph("This is text")
-Empty
 Paragraph("Another paragraph")
 ```
-
-> Does there need to be an `Empty` here
 
 #### Grouped paragraphs
 
@@ -111,7 +105,7 @@ And another one
 ```
 
 ```
-Paragraph("This is text in a paragraph\r\nAnd another one")
+Paragraph("This is text in a paragraph\nAnd another one")
 ```
 
 #### Continued paragraphs
@@ -126,7 +120,7 @@ in a paragraph
 ```
 
 ```
-Paragraph("This is text \\\r\nin a paragraph")
+Paragraph("This is text \\\nin a paragraph")
 ```
 
 ### Lists
@@ -217,7 +211,7 @@ ListItem { level: 0, enumerated: false, checked: None, content: "hello" }
 
 We can have blocks of literal content / code using triple (or more) backticks ```` ``` ````.
 
-> Also nested (META!). 
+> Also nested (META!).
 
 ````md
 ```
@@ -241,9 +235,40 @@ const x = 2;
 CodeBlock { language: "js", code: "const x = 2;" }
 ```
 
+#### With indent
+
+> Avoid
+
+```md
+    this is code
+    avoid this syntax
+
+    continued
+
+Back to paragraph
+```
+
+```
+CodeBlock { code: "this is code\n    avoid this syntax\n\n    continued" }
+Paragraph("Back to paragraph")
+```
+
+#### With tilda
+
+```md
+~~~js
+this is code
+avoid this syntax
+~~~
+```
+
+```
+CodeBlock { language: "js", code: "this is code\navoid this syntax" }
+```
+
 ### Mathematics blocks
 
-We can have blocks of *mathematical* notation 
+We can have blocks of *mathematical* notation
 
 ```md
 $$
@@ -259,7 +284,7 @@ BlockMathematics { script: "y=\\sin x" }
 
 ### Quotes
 
-Prefixing with a item with `RIGHT-POINTING ANGLE BRACKET` marks the content as being quoted. Typically these are indented and have a colored left border emphasising and ra a block from 
+Prefixing with a item with `RIGHT-POINTING ANGLE BRACKET` marks the content as being quoted. Typically these are indented and have a colored left border
 
 ```md
 > Hello
@@ -329,7 +354,6 @@ Tables can be constructed in markdown through the use of delimiting cells with `
 Table([["col1", "col2"], ["something", "another"], ["x", "y"]])
 ```
 
-
 #### Styling in tables
 
 ```md
@@ -358,7 +382,6 @@ more text
 
 ```
 Paragraph("some text")
-Empty
 HorizontalRule
 Paragraph("more text")
 ```
@@ -393,11 +416,10 @@ Content
 
 ```
 Frontmatter { [Slice("property")] -> String("front_of_document"), [Slice("author"), Slice("name")] -> String("\"Ben\"") }
-Empty
 Paragraph("Content")
 ```
 
-> Waiting for a fix 
+> Waiting for a fix
 
 ### Command blocks / custom blocks
 
@@ -422,20 +444,67 @@ Something here
 ```
 
 ```
-CommandBlock { name: if, arguments: [("", "true")], inner: [Empty, Paragraph("Something here")] }
+CommandBlock { name: if, arguments: [("", "true")], inner: [Paragraph("Something here")] }
 ```
 
-> `Empty` should not be there
+### Block HTML elements
+
+```md
+<details>
+<summary>Summary here</summary>
+
+> Some markdown content
+</details>
+
+paragraph
+
+<span class="inline">Inline span</span>
+
+another paragraph
+
+<div>
+Something here
+<div>
+Inside thing
+</div>
+</div>
+
+paragraph three
+```
+
+```
+HTMLElement(HTMLElement("<details>\n<summary>Summary here</summary>\n\n> Some markdown content\n</details>"))
+Paragraph("paragraph")
+HTMLElement(HTMLElement("<span class=\"inline\">Inline span</span>"))
+Paragraph("another paragraph")
+HTMLElement(HTMLElement("<div>\nSomething here\n<div>\nInside thing\n</div>\n</div>"))
+Paragraph("paragraph three")
+```
+
+#### HTML comments
+
+```md
+<!-- This is a comment -->
+
+paragraph
+```
+
+```
+HTMLElement(HTMLElement("<!-- This is a comment -->"))
+Paragraph("paragraph")
+```
 
 ## Styling
 
 These are inline elements
 
 There are blocks inside markdown
+
 - Links
 - Text
 
 These can be decorated, but whose decoration be altered until finished. The decoration may or may not apply to the item
+
 - Code
 - Mathematics
 - Tags (from Obsidian)
@@ -443,6 +512,7 @@ These can be decorated, but whose decoration be altered until finished. The deco
 - Emoji
 
 The rest is considered regular text, but can be styled with the following. These are binary, e.g. you cannot have double bold
+
 - Emphasis (italic)
 - Bold
 - Crossout
@@ -598,7 +668,6 @@ Link to <https://github.com/kaleidawave/benchmarks>
 Paragraph([Plain("Link to "), ExternalLink { to: "https://github.com/kaleidawave/benchmarks" } ("https://github.com/kaleidawave/benchmarks")])
 ```
 
-
 ### Inline mathematics
 
 Similar to [#block-mathematics] we have inline mathematics
@@ -655,8 +724,17 @@ Ozone layer O~3~
 
 ```
 Paragraph([Plain("The 16"), Plain("th", superscript), Plain(" of November")])
-Empty
 Paragraph([Plain("Ozone layer O"), Plain("3", subscript)])
+```
+
+### Inline HTML elements
+
+```md
+Some text with <span id='workaround'>text</span> here <!-- comment here -->
+```
+
+```
+Paragraph([Plain("Some text with "), HTMLElement("<span id='workaround'>text</span>"), Plain(" here "), HTMLElement("<!-- comment here -->")])
 ```
 
 ### Interpolation

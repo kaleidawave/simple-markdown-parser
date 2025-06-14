@@ -5,6 +5,7 @@
 [![docs.rs badge](https://img.shields.io/docsrs/simple-markdown-parser?style=flat-square)](https://docs.rs/simple-markdown-parser/latest)
 
 Uses
+
 - no dependencies
 - no allocations
 
@@ -19,9 +20,10 @@ TODO
 - Escaped code marks `code`
 - Titles in links
 - Highlight
-- Code block escapes: https://stackoverflow.com/a/71150969/10048799
+- Code block escapes: <https://stackoverflow.com/a/71150969/10048799>
 
 Additionally
+
 - CLI via example
 - Python?
 - Iterators and state machines. Does the text decoration cover enough?

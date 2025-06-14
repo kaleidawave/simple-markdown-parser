@@ -4,7 +4,7 @@ pub mod extras;
 pub mod utilities;
 
 /// Markdown block element
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub enum MarkdownElement<'a> {
     Heading {
         level: u8,
@@ -30,12 +30,7 @@ pub enum MarkdownElement<'a> {
     /// Inside `%%` (from Obsidan)
     CommentBlock(&'a str),
     /// Includes HTML comments
-    // TODO how much to do here
-    // #[cfg(feature = "html")]
-    // HTMLElement {
-    //     element: lightml::Element<'a>,
-    //     source: &'a str,
-    // },
+    HTMLElement(HTMLElement<'a>),
     // TODO at start?
     Frontmatter(Frontmatter<'a>),
     HorizontalRule,
@@ -54,12 +49,15 @@ impl<'a> RawText<'a> {
     }
 }
 
+/// Extras (that IMO should be all false )
 #[derive(Default, Copy, Clone)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct ParseOptions {
-    /// Avoid
     pub allow_asterisk_and_plus_as_list_prefixes: bool,
-    /// Avoid
     pub heading_underscores: bool,
+    pub record_empty_lines: bool,
+    pub indented_code_blocks: bool,
+    pub tilda_code_blocks: bool,
 }
 
 #[derive(Debug)]
@@ -95,7 +93,7 @@ pub fn parse_with_options<'a, T>(
     mut cb: impl FnMut(MarkdownElement<'a>) -> Result<(), T>,
 ) -> Result<(), MarkdownParseError<T>> {
     #[allow(clippy::needless_lifetimes)]
-    fn classify_line<'a>(item: &'a str, options: ParseOptions) -> MarkdownElement<'a> {
+    fn classify_line(item: &str, options: ParseOptions) -> MarkdownElement<'_> {
         let trimmed = item.trim();
 
         let list_prefixes: &[char] = if options.allow_asterisk_and_plus_as_list_prefixes {
@@ -115,10 +113,12 @@ pub fn parse_with_options<'a, T>(
             })
         } else if trimmed.starts_with('#') {
             let level = trimmed.chars().take_while(|c| *c == '#').count();
+            // TODO trim of trailing `#`s
+            let content = trimmed[level..].trim();
             if trimmed[level..].starts_with(char::is_whitespace) {
                 MarkdownElement::Heading {
                     level: level.try_into().expect("deep header"),
-                    content: RawText(trimmed[level..].trim()),
+                    content: RawText(content),
                 }
             } else {
                 // Fix for tags
@@ -155,10 +155,6 @@ pub fn parse_with_options<'a, T>(
         }
     }
 
-    // TODO explain difference between upto last_line and end...
-    let mut upto = 0;
-    let mut last_line = 0;
-
     #[derive(Clone, Copy, Debug)]
     enum State<'a> {
         None,
@@ -178,13 +174,22 @@ pub fn parse_with_options<'a, T>(
         Quote {
             alert: Option<&'a str>,
         },
+        HTMLElement {
+            tag_name: &'a str,
+            // FUTURE a bit of a hack
+            depth: usize,
+        },
     }
+
+    // TODO explain difference between upto last_line and end...
+    let mut upto = 0;
+    let mut last_line = 0;
 
     let mut state = State::None;
 
-    let mut char_indices = on.char_indices().chain([(on.len(), '\n')]);
+    let char_indices = on.char_indices().chain([(on.len(), '\n')]);
 
-    while let Some((idx, chr)) = char_indices.next() {
+    for (idx, chr) in char_indices {
         if let '\n' = chr {
             let mut line = &on[last_line..idx];
             if let State::None = state {
@@ -207,6 +212,29 @@ pub fn parse_with_options<'a, T>(
             for _ in 0..quote_depth {
                 // FUTURE unwrap?
                 line = line.strip_prefix('>').unwrap_or(line);
+            }
+
+            // This is done here because more might need to present here
+            if let State::CodeBlock {
+                language: _,
+                delimeter: "    ",
+            } = state
+            {
+                let r#continue =
+                    line.is_empty() || line.starts_with("    ") || line.starts_with('\t');
+                if r#continue {
+                    last_line = idx + '\n'.len_utf8();
+                    continue;
+                }
+
+                // Important that take is done to reset option
+                let code_block = MarkdownElement::CodeBlock(CodeBlock {
+                    language: "",
+                    code: &on[upto..last_line],
+                });
+                cb(code_block).map_err(MarkdownParseError::FromCallback)?;
+                upto = last_line;
+                state = State::None;
             }
 
             match state {
@@ -312,18 +340,66 @@ pub fn parse_with_options<'a, T>(
                         upto = idx + 1;
                     }
                 }
+                State::HTMLElement {
+                    tag_name,
+                    ref mut depth,
+                } => {
+                    let line = line.trim_end();
+                    if let (0, Some(line)) = (*depth, line.strip_suffix('>')) {
+                        let element = MarkdownElement::HTMLElement(HTMLElement(&on[upto..idx]));
+                        let is_comment = tag_name == "!--" && line.ends_with("-->");
+                        let r#yield = is_comment
+                            || line
+                                .rfind("</")
+                                .is_some_and(|close| &line[2..][close..] == tag_name);
+                        if r#yield {
+                            cb(element).map_err(MarkdownParseError::FromCallback)?;
+                            state = State::None;
+                            upto = idx + 1;
+                            last_line = idx + '\n'.len_utf8();
+                            continue;
+                        }
+                    }
+
+                    // FUTURE needs improving
+                    for (idx, _) in line.match_indices("<") {
+                        let rest = &line[idx..];
+                        let (check, new) = if rest.starts_with("</") {
+                            (&rest[2..], depth.saturating_sub(1))
+                        } else {
+                            (&rest[1..], *depth + 1)
+                        };
+                        let out = check
+                            .split_once(|chr: char| !chr.is_alphanumeric())
+                            .map_or(rest, |(l, _)| l);
+                        if out == tag_name {
+                            *depth = new;
+                        }
+                    }
+                }
                 State::None => {
-                    if line.starts_with("```") {
-                        let matching = line.chars().take_while(|c| *c == '`').count();
+                    if line.starts_with("```")
+                        || (options.tilda_code_blocks && line.starts_with("~~~"))
+                    {
+                        let delimeter_char = line.chars().next().unwrap();
+                        let matching = line
+                            .find(|c: char| c != delimeter_char)
+                            .unwrap_or(line.len());
                         // For nesting
-                        let backticks = &line[..matching];
+                        let delimeter = &line[..matching];
                         // TODO other motifiers here?
                         let language = &line[matching..].trim();
                         state = State::CodeBlock {
-                            delimeter: backticks,
+                            delimeter,
                             language,
                         };
                         upto = idx + '\n'.len_utf8();
+                    } else if options.indented_code_blocks && line.starts_with("    ") {
+                        state = State::CodeBlock {
+                            delimeter: "    ",
+                            language: "",
+                        };
+                        upto = last_line;
                     } else if let "$$" = line.trim() {
                         state = State::MathematicsBlock;
                         upto = idx + '\n'.len_utf8();
@@ -336,6 +412,40 @@ pub fn parse_with_options<'a, T>(
                             upto = idx + 1;
                         }
                         state = State::Quote { alert };
+                    } else if let Some(rest) = line.strip_prefix('<') {
+                        let trimmed = line.trim_end();
+                        if rest.starts_with("!--") {
+                            if trimmed.ends_with("-->") {
+                                let element =
+                                    MarkdownElement::HTMLElement(HTMLElement(&on[upto..idx]));
+                                cb(element).map_err(MarkdownParseError::FromCallback)?;
+                                state = State::None;
+                                upto = idx + 1;
+                            } else {
+                                state = State::HTMLElement {
+                                    tag_name: "!--",
+                                    depth: 0,
+                                }
+                            }
+                        } else {
+                            let tag_name = rest
+                                .split_once(|chr: char| !chr.is_alphanumeric())
+                                .map_or(rest, |(l, _)| l);
+                            let single_line = trimmed.strip_suffix('>').is_some_and(|rest| {
+                                rest.rfind("</")
+                                    .is_some_and(|idx| &rest[2..][idx..] == tag_name)
+                            });
+
+                            if single_line {
+                                let element =
+                                    MarkdownElement::HTMLElement(HTMLElement(&on[upto..idx]));
+                                cb(element).map_err(MarkdownParseError::FromCallback)?;
+                                state = State::None;
+                                upto = idx + 1;
+                            } else {
+                                state = State::HTMLElement { tag_name, depth: 0 };
+                            }
+                        }
                     } else if let Some(line) = line.trim_start().strip_prefix("%%") {
                         if let Some(out) = line.trim_end().strip_suffix("%%") {
                             let comment_block = MarkdownElement::CommentBlock(out.trim());
@@ -367,31 +477,6 @@ pub fn parse_with_options<'a, T>(
                             state = State::CommandHeader;
                         }
                     } else {
-                        // #[cfg(feature = "html")]
-                        // if line.starts_with("<") {
-                        //     use lightml::Element;
-                        //     let current = &on[upto..];
-
-                        //     let result = Element::from_string(current);
-                        //     let (element, consumed) = match result {
-                        //         Ok(result) => result,
-                        //         Err(err) => {
-                        //             panic!("{err:?}");
-                        //         }
-                        //     };
-                        //     let source = &current[..consumed as usize];
-                        //     // TODO eww
-                        //     {
-                        //         (0..source.chars().count()).for_each(|_| {
-                        //             char_indices.next();
-                        //         });
-                        //     }
-                        //     cb(MarkdownElement::HTMLElement { element, source })
-                        //         .map_err(MarkdownParseError::FromCallback)?;
-                        //     upto += consumed as usize;
-                        //     continue;
-                        // }
-
                         if options.heading_underscores
                             && !line.trim().is_empty()
                             && utilities::strip_upto_one_new_line(&on[idx..]).starts_with("---")
@@ -406,11 +491,15 @@ pub fn parse_with_options<'a, T>(
                             last_line = upto;
                             cb(header).map_err(MarkdownParseError::FromCallback)?;
                             continue;
-                        } else {
-                            let item = classify_line(line, options);
-                            cb(item).map_err(MarkdownParseError::FromCallback)?;
-                            upto = idx + '\n'.len_utf8();
                         }
+
+                        let item = classify_line(line, options);
+                        let skip =
+                            !options.record_empty_lines && matches!(item, MarkdownElement::Empty);
+                        if !skip {
+                            cb(item).map_err(MarkdownParseError::FromCallback)?;
+                        }
+                        upto = idx + '\n'.len_utf8();
                     }
                 }
             }
@@ -458,7 +547,7 @@ impl std::ops::BitAndAssign for TextDecoration {
 }
 
 impl TextDecoration {
-    pub const NONE: TextDecoration = TextDecoration(0 << 0);
+    pub const NONE: TextDecoration = TextDecoration(0);
 
     // Basic decoration
     pub const BOLD: TextDecoration = TextDecoration(1 << 0);
@@ -472,10 +561,12 @@ impl TextDecoration {
     pub const SUPERSCRIPT: TextDecoration = TextDecoration(1 << 4);
     pub const SUBSCRIPT: TextDecoration = TextDecoration(1 << 5);
 
+    #[must_use]
     pub fn contains(self, other: TextDecoration) -> bool {
         (self.0 & other.0) != 0
     }
 
+    #[must_use]
     pub fn is_empty(self) -> bool {
         self == Self::NONE
     }
@@ -503,6 +594,14 @@ pub enum MarkdownPart<'a> {
     MediaLink {
         source: &'a str,
     },
+    HTMLElement,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct MarkdownTextElement<'a> {
+    pub on: &'a str,
+    pub decoration: TextDecoration,
+    pub kind: MarkdownPart<'a>,
 }
 
 /// Abstraction for iterating over markdown content sections giving decoration (bold, links, etc) information
@@ -526,13 +625,6 @@ impl<'a> PartsIterator<'a> {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
-pub struct MarkdownTextElement<'a> {
-    pub on: &'a str,
-    pub decoration: TextDecoration,
-    pub kind: MarkdownPart<'a>,
-}
-
 impl<'a> Iterator for PartsIterator<'a> {
     // TODO Result
     type Item = MarkdownTextElement<'a>;
@@ -543,185 +635,197 @@ impl<'a> Iterator for PartsIterator<'a> {
             None
         } else {
             let range = &self.on[self.last..];
-            let Some(first_char) = range.chars().next() else {
-                return None;
-            };
-
+            let first_char = range.chars().next()?;
+            let after = &range[1..];
             let mut escaped = false;
-
             match first_char {
                 '$' => {
-                    let kind = MarkdownPart::InlineMathematics;
-                    for (idx, chr) in range.char_indices().skip(1) {
-                        if let '$' = chr {
-                            self.last += idx + 1;
-                            return Some(MarkdownTextElement {
-                                on: &range[1..idx],
-                                decoration: self.decoration,
-                                kind,
-                            });
-                        }
-                    }
-                    todo!("error");
+                    let idx = after.find('$');
+                    let Some(idx) = idx else {
+                        todo!("error: could not find '$' in {range:?}");
+                    };
+                    self.last += idx + 2;
+                    Some(MarkdownTextElement {
+                        on: &after[..idx],
+                        decoration: self.decoration,
+                        kind: MarkdownPart::InlineMathematics,
+                    })
                 }
                 '`' => {
-                    let kind = MarkdownPart::InlineCode;
-                    let depth = range.chars().take_while(|chr| *chr == '`').count();
+                    let depth = range.find(|c: char| c != '`').unwrap_or(range.len() / 2);
                     let delimeter = &range[..depth];
-                    for (idx, _) in range.char_indices().skip(depth) {
-                        if range[idx..].starts_with(delimeter) {
-                            self.last += idx + delimeter.len();
-                            let on = &range[delimeter.len()..idx];
-                            // https://spec.commonmark.org/0.31.2/#example-329
-                            let on = on
-                                .chars()
-                                .all(|chr| chr == ' ')
-                                .then_some(on)
-                                .unwrap_or_else(|| {
-                                    on.strip_prefix(' ')
-                                        .and_then(|rest| rest.strip_suffix(' '))
-                                        .unwrap_or(on)
-                                });
-                            return Some(MarkdownTextElement {
-                                on,
-                                decoration: self.decoration,
-                                kind,
-                            });
-                        }
-                    }
-                    todo!("error")
+                    let idx = after.find(delimeter);
+                    let Some(idx) = idx else {
+                        todo!("error: count not find '{delimeter}' in {after:?}");
+                    };
+                    let on = &range[delimeter.len()..(idx + 1)];
+                    // https://spec.commonmark.org/0.31.2/#example-329
+                    let blank = on.chars().all(|chr| chr == ' ');
+                    let on = if blank {
+                        on
+                    } else {
+                        on.strip_prefix(' ')
+                            .and_then(|rest| rest.strip_suffix(' '))
+                            .unwrap_or(on)
+                    };
+                    self.last += idx + delimeter.len() * 2;
+                    Some(MarkdownTextElement {
+                        on,
+                        decoration: self.decoration,
+                        kind: MarkdownPart::InlineCode,
+                    })
                 }
                 '#' => {
-                    let kind = MarkdownPart::Tag;
-                    for (idx, chr) in range.char_indices().skip(1) {
-                        if chr.is_whitespace() {
-                            self.last += idx;
-                            return Some(MarkdownTextElement {
-                                on: &range[1..idx],
-                                decoration: self.decoration,
-                                kind,
-                            });
-                        }
-                    }
-                    return Some(MarkdownTextElement {
-                        on: &range[1..],
+                    let idx = after
+                        .find(|chr: char| chr.is_whitespace())
+                        .unwrap_or(after.len());
+                    self.last += idx + 1;
+                    Some(MarkdownTextElement {
+                        on: &after[..idx],
                         decoration: self.decoration,
-                        kind,
-                    });
+                        kind: MarkdownPart::Tag,
+                    })
                 }
                 '{' => {
-                    let kind = MarkdownPart::Interpolation;
-                    let mut brace_depth: u8 = 1;
-                    for (idx, chr) in range.char_indices().skip(1) {
-                        brace_depth = match chr {
-                            '}' => brace_depth.saturating_sub(1),
-                            '{' => brace_depth + 1,
-                            _ => brace_depth,
+                    let mut brace_depth: u8 = 0;
+                    for (idx, matched) in after.match_indices(&['{', '}']) {
+                        brace_depth = match matched {
+                            "}" => brace_depth.saturating_sub(1),
+                            "{" => brace_depth + 1,
+                            matched => unreachable!("{matched}"),
                         };
                         if brace_depth == 0 {
-                            self.last += idx + 1;
+                            self.last += idx + 2;
                             return Some(MarkdownTextElement {
-                                on: &range[1..idx],
+                                on: &after[..idx],
                                 decoration: self.decoration,
-                                kind,
+                                kind: MarkdownPart::Interpolation,
                             });
                         }
                     }
                     todo!("error")
                 }
-                ':' if range
-                    .chars()
-                    .skip(1)
-                    .next()
-                    .is_some_and(char::is_alphanumeric) =>
+                ':' if after.starts_with(char::is_alphanumeric) => {
+                    // TODO utilities
+                    let Some(idx) = range[1..].find(':').map(|idx| idx + 1) else {
+                        todo!("error")
+                    };
+                    self.last += idx + 1;
+                    Some(MarkdownTextElement {
+                        on: &range[1..idx],
+                        decoration: self.decoration,
+                        kind: MarkdownPart::Emoji,
+                    })
+                }
+                '<' if after
+                    .starts_with(|chr: char| chr.is_alphanumeric() || matches!(chr, '!')) =>
                 {
-                    let kind = MarkdownPart::Emoji;
-                    for (idx, chr) in range.char_indices().skip(1) {
-                        if let ':' = chr {
-                            self.last += idx + 1;
-                            return Some(MarkdownTextElement {
-                                on: &range[1..idx],
-                                decoration: self.decoration,
-                                kind,
-                            });
+                    let scheme_space = after.get(..32).unwrap_or(after);
+                    let is_scheme = scheme_space.find(':').is_some_and(|idx| {
+                        scheme_space[..idx]
+                            .chars()
+                            .all(|chr| chr.is_alphanumeric() || matches!(chr, '+' | '.' | '-'))
+                    });
+                    if is_scheme {
+                        let Some(idx) = range.find('>') else {
+                            todo!("no end to autolink found. return error")
+                        };
+                        self.last += idx + 1;
+                        let inner = &range[1..idx];
+                        Some(MarkdownTextElement {
+                            on: inner,
+                            decoration: self.decoration,
+                            kind: MarkdownPart::ExternalLink { to: inner },
+                        })
+                    } else if range.starts_with("<!--") {
+                        let Some(idx) = range.find("-->") else {
+                            todo!("no end to comment found. return error")
+                        };
+                        self.last += idx + 3;
+                        let inner = &range[..(idx + 3)];
+                        Some(MarkdownTextElement {
+                            on: inner,
+                            decoration: self.decoration,
+                            kind: MarkdownPart::HTMLElement,
+                        })
+                    } else {
+                        let tag_name =
+                            if let Some(idx) = after.find(|chr: char| !chr.is_alphanumeric()) {
+                                &after[..idx]
+                            } else {
+                                todo!("no error to tag name")
+                            };
+
+                        let mut depth: u8 = 0;
+                        let mut last_idx = range.len();
+                        for (idx, _matched) in range.match_indices('<') {
+                            if range[idx..]
+                                .strip_prefix("</")
+                                .is_some_and(|rest| rest.starts_with(tag_name))
+                            {
+                                depth = depth.saturating_sub(1);
+                                if depth == 0 {
+                                    last_idx = idx + 2 + tag_name.len() + 1;
+                                    break;
+                                }
+                            } else if range[idx..][1..].starts_with(tag_name) {
+                                depth += 1;
+                            }
                         }
+                        let inner = &range[..last_idx];
+                        self.last += last_idx;
+                        Some(MarkdownTextElement {
+                            on: inner,
+                            decoration: self.decoration,
+                            kind: MarkdownPart::HTMLElement,
+                        })
                     }
-                    todo!("error")
-                }
-                '<' => {
-                    for (idx, chr) in range.char_indices().skip(1) {
-                        if let '>' = chr {
-                            self.last += idx + 1;
-                            // self.in_chevron_link = false;
-                            let inner = &range[1..idx];
-                            return Some(MarkdownTextElement {
-                                on: inner,
-                                decoration: self.decoration,
-                                kind: MarkdownPart::ExternalLink { to: inner },
-                            });
-                        }
-                    }
-                    todo!("error")
                 }
                 '!' if range.starts_with("![") => {
-                    let till_bracket = range
-                        .char_indices()
-                        .skip_while(|(_, chr)| *chr != ']')
-                        .next();
-                    let Some((bracket_offset, _)) = till_bracket else {
-                        todo!("error");
+                    let till_bracket = range[2..].find(']').map(|idx| idx + 2);
+                    let Some(bracket_offset) = till_bracket else {
+                        todo!("error: could not find ']' in {after:?}");
                     };
                     let alt_text = &range[2..bracket_offset];
                     let next = &range[(bracket_offset + 1)..];
-                    let mut next_chars = next.char_indices();
-                    if let Some((_, '(')) = next_chars.next() {
-                        let Some((parenthesis_offset, _)) =
-                            next_chars.skip_while(|(_, chr)| *chr != ')').next()
-                        else {
-                            todo!("error")
-                        };
-                        let source = &range[(bracket_offset + 1)..][1..parenthesis_offset];
-                        self.last += 1 + bracket_offset + parenthesis_offset + 1;
-                        return Some(MarkdownTextElement {
-                            on: alt_text,
-                            decoration: self.decoration,
-                            kind: MarkdownPart::MediaLink { source },
-                        });
-                    } else {
-                        todo!("error")
-                    }
+                    assert!(next.starts_with('('));
+                    let Some(parenthesis_offset) = next.find(')') else {
+                        todo!("error: count not find ')' in {next:?}")
+                    };
+                    let source = &range[(bracket_offset + 1)..][1..parenthesis_offset];
+                    self.last += 1 + bracket_offset + parenthesis_offset + 1;
+                    Some(MarkdownTextElement {
+                        on: alt_text,
+                        decoration: self.decoration,
+                        kind: MarkdownPart::MediaLink { source },
+                    })
                 }
                 '[' => {
-                    let till_bracket = range
-                        .char_indices()
-                        .skip_while(|(_, chr)| *chr != ']')
-                        .next();
-                    let Some((bracket_offset, _)) = till_bracket else {
+                    let till_bracket = after.find(|chr| chr == ']');
+                    let Some(bracket_offset) = till_bracket else {
                         todo!("error");
                     };
-                    let content = &range[1..bracket_offset];
-                    let next = &range[(bracket_offset + 1)..];
-                    let mut next_chars = next.char_indices();
-                    if let Some((_, '(')) = next_chars.next() {
-                        let Some((parenthesis_offset, _)) =
-                            next_chars.skip_while(|(_, chr)| *chr != ')').next()
+                    let content = &after[..bracket_offset];
+                    let next = &after[(bracket_offset + 1)..];
+                    if next.starts_with('(') {
+                        let Some(parenthesis_offset) = next[1..].find(')').map(|idx| idx + 1)
                         else {
                             todo!("error")
                         };
-                        let to = &range[(bracket_offset + 1)..][1..parenthesis_offset];
-                        self.last += 1 + bracket_offset + parenthesis_offset + 1;
-                        return Some(MarkdownTextElement {
+                        let to = &after[(bracket_offset + 1)..][1..parenthesis_offset];
+                        self.last += 2 + bracket_offset + parenthesis_offset + 1;
+                        Some(MarkdownTextElement {
                             on: content,
                             decoration: self.decoration,
                             kind: MarkdownPart::ExternalLink { to },
-                        });
+                        })
                     } else {
-                        self.last += 1 + bracket_offset;
-                        return Some(MarkdownTextElement {
+                        self.last += 2 + bracket_offset;
+                        Some(MarkdownTextElement {
                             on: content,
                             decoration: self.decoration,
                             kind: MarkdownPart::InternalLink { to: content },
-                        });
+                        })
                     }
                 }
                 _ => {
@@ -734,12 +838,11 @@ impl<'a> Iterator for PartsIterator<'a> {
                             let mut offset = idx;
                             let current_decoration = self.decoration;
                             let r#yield = match chr {
-                                '$' | '`' | '#' | '{' | '<' | '[' => true,
+                                '$' | '`' | '#' | '{' | '[' => true,
                                 '!' => range[idx..].starts_with("!["),
                                 ':' => range[idx..]
                                     .chars()
-                                    .skip(1)
-                                    .next()
+                                    .nth(1)
                                     .is_some_and(char::is_alphanumeric),
                                 '_' | '*' => {
                                     // FUTURE lots invalid here
@@ -772,6 +875,9 @@ impl<'a> Iterator for PartsIterator<'a> {
                                     }
                                     true
                                 }
+                                '<' => range[idx..][1..].starts_with(|chr: char| {
+                                    chr.is_alphanumeric() || matches!(chr, '!')
+                                }),
                                 '=' if range[idx..].starts_with("==") => {
                                     self.decoration ^= TextDecoration::HIGHLIGHTED;
                                     offset += 2;
@@ -781,16 +887,16 @@ impl<'a> Iterator for PartsIterator<'a> {
                             };
                             if r#yield {
                                 self.last += offset;
-                                if !range[..idx].is_empty() {
-                                    return Some(MarkdownTextElement {
+                                return if range[..idx].is_empty() {
+                                    // cheeky way to jump to top
+                                    self.next()
+                                } else {
+                                    Some(MarkdownTextElement {
                                         on: &range[..idx],
                                         decoration: current_decoration,
                                         kind,
-                                    });
-                                } else {
-                                    // cheeky way to jump to top
-                                    return self.next();
-                                }
+                                    })
+                                };
                             }
                             escaped = chr == '\\';
                         }
@@ -799,15 +905,18 @@ impl<'a> Iterator for PartsIterator<'a> {
                     self.last = self.on.len();
 
                     if !self.decoration.is_empty() {
-                        // todo!("error");
                         eprintln!("error {:?}", self.decoration);
                     }
 
-                    return (!range.trim().is_empty()).then_some(MarkdownTextElement {
-                        on: range.trim_end(),
-                        decoration: self.decoration,
-                        kind,
-                    });
+                    if range.trim().is_empty() {
+                        None
+                    } else {
+                        Some(MarkdownTextElement {
+                            on: range.trim_end(),
+                            decoration: self.decoration,
+                            kind,
+                        })
+                    }
                 }
             }
         }
@@ -856,13 +965,13 @@ impl<'a> CommandBlock<'a> {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Frontmatter<'a>(pub &'a str);
 
-impl<'a> Frontmatter<'a> {
+impl Frontmatter<'_> {
     #[cfg(feature = "yaml")]
     pub fn parse_yaml(
         &self,
         cb: impl for<'b> FnMut(
-            &'b [simple_yaml_parser::YAMLKey<'a>],
-            simple_yaml_parser::RootYAMLValue<'a>,
+            &'b [simple_yaml_parser::YAMLKey<'_>],
+            simple_yaml_parser::RootYAMLValue<'_>,
         ),
     ) -> Result<(), simple_yaml_parser::YAMLParseError> {
         simple_yaml_parser::parse(self.0, cb)
@@ -871,7 +980,8 @@ impl<'a> Frontmatter<'a> {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct QuoteBlock<'a> {
-    /// [See GitHub markdown alerts](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax#alerts). Note this allows any alerts. It does not check from a defined list
+    /// [See GitHub markdown alerts](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax#alerts).
+    /// Note this allows any alerts. It does not check from a defined list
     pub alert: Option<&'a str>,
     pub inner: &'a str,
 }
@@ -881,3 +991,6 @@ pub struct CodeBlock<'a> {
     pub language: &'a str,
     pub code: &'a str,
 }
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct HTMLElement<'a>(pub &'a str);
