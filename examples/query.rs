@@ -1,5 +1,5 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use simple_markdown_parser::utilities::extraction::*;
+    use simple_markdown_parser::utilities::extraction::{between_headers, links, Stop};
 
     let mut args: std::collections::VecDeque<_> = std::env::args().skip(1).collect();
     let path = args.pop_front().unwrap();
@@ -13,11 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 links(&content, |name, link| eprintln!("{name} -> {link}"));
             }
             "heading" => {
-                let start = if let Some(start) = args.pop_front() {
-                    Some(start)
-                } else {
-                    None
-                };
+                let start = args.pop_front();
                 let arg = args.pop_front();
                 let stop = if let Some(stop) = arg.as_deref() {
                     Some(match stop {
@@ -29,8 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             } else {
                                 return Err(Box::<dyn std::error::Error>::from(format!(
                                     "Do not know how to interpret {stop}"
-                                ))
-                                .into());
+                                )));
                             }
                         }
                     })

@@ -31,7 +31,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut analyser = Store::default();
 
-    let _ = simple_markdown_parser::utilities::lexical_analysis::lexical_analysis(
+    let () = simple_markdown_parser::utilities::lexical_analysis::lexical_analysis(
         &content,
         &mut analyser,
     );
