@@ -26,30 +26,31 @@ pub fn markdown_to_html_string(source: &str, emitter: Option<FeatureEmitterWASM>
 
 pub fn markdown_to_html(
     source: &str,
-    out: &mut impl Write,
-    emitter: &impl FeatureEmitter,
+    _out: &mut impl Write,
+    _emitter: &impl FeatureEmitter,
     options: ParseOptions,
-    quote_depth: u8,
+    container_residue: super::ContainerResidue<'_>,
 ) -> Result<(), MarkdownParseError<()>> {
-    let mut last_was_list_item: Option<&'static str> = None;
-    crate::parse_with_options::<()>(source, options, quote_depth, |item| {
-        let is_list_item = if let MarkdownElement::ListItem {
-            enumerated,
-            checked: _,
-            ..
-        } = item
-        {
-            Some(if enumerated { "ol" } else { "ul" })
-        } else {
-            None
-        };
-        if let (Some(tag), None) = (is_list_item, last_was_list_item) {
-            writeln!(out, "<{tag}>").unwrap();
-        } else if let (None, Some(tag)) = (is_list_item, last_was_list_item) {
-            writeln!(out, "</{tag}>").unwrap();
-        }
-        element_to_html(out, emitter, options, quote_depth, item).unwrap();
-        last_was_list_item = is_list_item;
+    // let mut last_was_list_item: Option<&'static str> = None;
+    crate::parse_with_options::<()>(source, options, container_residue, |_item| {
+        todo!();
+        // let is_list_item = if let MarkdownElement::ListItem {
+        //     enumerated,
+        //     checked: _,
+        //     ..
+        // } = item
+        // {
+        //     Some(if enumerated { "ol" } else { "ul" })
+        // } else {
+        //     None
+        // };
+        // if let (Some(tag), None) = (is_list_item, last_was_list_item) {
+        //     writeln!(out, "<{tag}>").unwrap();
+        // } else if let (None, Some(tag)) = (is_list_item, last_was_list_item) {
+        //     writeln!(out, "</{tag}>").unwrap();
+        // }
+        // element_to_html(out, emitter, options, quote_depth, item).unwrap();
+        // last_was_list_item = is_list_item;
 
         Ok(())
     })
@@ -212,7 +213,7 @@ pub fn element_to_html(
     out: &mut impl Write,
     emitter: &impl FeatureEmitter,
     options: ParseOptions,
-    quote_depth: u8,
+    _quote_depth: u8,
     item: MarkdownElement,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match item {
@@ -235,7 +236,8 @@ pub fn element_to_html(
             } else {
                 write!(out, ">")?;
             }
-            markdown_to_html(block.inner, out, emitter, options, quote_depth + 1).unwrap();
+            todo!();
+            // markdown_to_html(block.inner, out, emitter, options, quote_depth + 1).unwrap();
             writeln!(out, "</blockquote>")?;
         }
         MarkdownElement::Paragraph(content) => {
@@ -248,16 +250,19 @@ pub fn element_to_html(
                 writeln!(out, "</p>")?;
             }
         }
-        MarkdownElement::ListItem {
-            level: _level,
-            content,
-            enumerated: _,
-            checked: _,
-        } => {
-            writeln!(out, "<li>")?;
-            inner_to_html(out, emitter, content)?;
-            writeln!(out, "</li>")?;
+        MarkdownElement::List(_list) => {
+            todo!()
         }
+        // MarkdownElement::ListItem {
+        //     level: _level,
+        //     content,
+        //     enumerated: _,
+        //     checked: _,
+        // } => {
+        //     writeln!(out, "<li>")?;
+        //     inner_to_html(out, emitter, content)?;
+        //     writeln!(out, "</li>")?;
+        // }
         // TODO test
         MarkdownElement::Table(table) => {
             writeln!(out, "<table>")?;
@@ -282,14 +287,18 @@ pub fn element_to_html(
             writeln!(out, "</tbody>")?;
             writeln!(out, "</table>")?;
         }
-        MarkdownElement::CodeBlock(crate::CodeBlock { language, code }) => {
+        MarkdownElement::CodeBlock(crate::CodeBlock {
+            language,
+            code,
+            indented_block: _,
+        }) => {
             let inner = emitter.code_block(language, code);
             writeln!(
                 out,
                 "<pre data-language=\"{language}\"><code>{inner}</code></pre>"
             )?;
         }
-        MarkdownElement::BlockMathematics { script } => {
+        MarkdownElement::BlockMathematics(crate::BlockMathematics(script)) => {
             writeln!(
                 out,
                 "<p class=\"mathematics block\">{inner}</p>",
@@ -439,13 +448,14 @@ pub fn inner_to_html(
                 "<img src=\"{source}\" alt=\"{on}\">",
                 on = escape_string_content(on)
             )?,
+            MarkdownPart::LineBreak => write!(out, "<br>",)?,
             // FUTURE improve
             MarkdownPart::InternalLink { to } => write!(
                 out,
                 "<a href=\"#{to}\">{on}</a>",
                 on = escape_string_content(on)
             )?,
-            MarkdownPart::HTMLElement => write!(out, "{on}")?,
+            MarkdownPart::HTMLElement(element) => write!(out, "{content}", content = element.0)?,
         }
         current = decoration;
     }

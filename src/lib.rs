@@ -1,6 +1,6 @@
 #![doc = include_str!("../README.md")]
 
-pub mod extras;
+pub mod emit;
 pub mod utilities;
 
 /// Markdown block element
@@ -12,20 +12,11 @@ pub enum MarkdownElement<'a> {
     },
     Quote(QuoteBlock<'a>),
     Paragraph(RawText<'a>),
-    ListItem {
-        level: u8,
-        content: RawText<'a>,
-        /// TODO probably need more options here
-        enumerated: bool,
-        /// from `- [x]` etc
-        checked: Option<bool>,
-    },
+    List(List<'a>),
     Table(Table<'a>),
     // TODO modifiers
     CodeBlock(CodeBlock<'a>),
-    BlockMathematics {
-        script: &'a str,
-    },
+    BlockMathematics(BlockMathematics<'a>),
     CommandBlock(CommandBlock<'a>),
     /// Inside `%%` (from Obsidan)
     CommentBlock(&'a str),
@@ -39,13 +30,13 @@ pub enum MarkdownElement<'a> {
 }
 
 /// (unsplit) Text inside markdown item
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct RawText<'a>(pub &'a str);
+#[derive(Debug, Copy, Clone)]
+pub struct RawText<'a>(pub &'a str, pub ContainerResidue<'a>);
 
 impl<'a> RawText<'a> {
     #[must_use]
     pub fn parts(&self) -> PartsIterator<'a> {
-        PartsIterator::new(self.0)
+        PartsIterator::new(self.0, self.1)
     }
 }
 
@@ -79,440 +70,439 @@ pub fn parse<'a, T>(
     on: &'a str,
     cb: impl FnMut(MarkdownElement<'a>) -> Result<(), T>,
 ) -> Result<(), MarkdownParseError<T>> {
-    parse_with_options(on, ParseOptions::default(), 0, cb)
+    parse_with_options(on, ParseOptions::default(), ContainerResidue::default(), cb)
 }
 
-/// Parse source using callback
-/// # Errors
-/// errors for unclosed blocks
-#[allow(clippy::result_unit_err, clippy::too_many_lines)]
 pub fn parse_with_options<'a, T>(
     on: &'a str,
     options: ParseOptions,
-    quote_depth: u8,
-    mut cb: impl FnMut(MarkdownElement<'a>) -> Result<(), T>,
+    container_residue: ContainerResidue<'a>,
+    cb: impl FnMut(MarkdownElement<'a>) -> Result<(), T>,
 ) -> Result<(), MarkdownParseError<T>> {
-    #[allow(clippy::needless_lifetimes)]
-    fn classify_line(item: &str, options: ParseOptions) -> MarkdownElement<'_> {
-        let trimmed = item.trim();
+    MarkdownParser::parse_with_options(on, options, container_residue, cb)
+}
 
-        let list_prefixes: &[char] = if options.allow_asterisk_and_plus_as_list_prefixes {
-            &['-', '+', '*']
-        } else {
-            &['-']
+#[derive(Clone, Copy, Debug)]
+enum State<'a> {
+    None,
+    CodeBlock {
+        language: &'a str,
+        delimeter: &'a str,
+    },
+    Command {
+        name: &'a str,
+        arguments: &'a str,
+    },
+    Frontmatter,
+    Table,
+    MathematicsBlock,
+    MarkdownComment,
+    CommandHeader,
+    Quote {
+        alert: Option<&'a str>,
+    },
+    List,
+    HTMLElement {
+        tag_name: &'a str,
+    },
+}
+
+// #[derive(Clone, Copy, Debug, Default)]
+// pub enum ContainerResidue<'a> {
+//     InQuote(utilities::QuoteDepth),
+//     InList(utilities::ListDepth),
+//     #[default]
+//     None,
+// }
+
+// type ContainerResidue<'a> = ContainerResidue;
+
+// impl ContainerResidue<'a> {
+//     pub fn remove_parent_slice(self, line: &str) -> &str {
+//         match self {
+//             ContainerResidue<'a>::InQuote(quote_depth) => quote_depth.strip_chevrons(line),
+//             ContainerResidue<'a>::InList(depth) => depth.strip_indent(line),
+//             ContainerResidue::default() => line,
+//         }
+//     }
+// }
+
+pub struct MarkdownParser<'a, F> {
+    reader: utilities::EdibleLines<'a>,
+    state: State<'a>,
+    container_residue: ContainerResidue<'a>,
+    options: ParseOptions,
+    cb: F,
+}
+
+pub const BASIC_LIST_PREFIXES: &[char] = &['-'];
+pub const EXTENDED_LIST_PREFIXES: &[char] = &['-', '+', '*'];
+
+impl<'a, F, T> MarkdownParser<'a, F>
+where
+    F: FnMut(MarkdownElement<'a>) -> Result<(), T>,
+{
+    /// Parse source using callback
+    /// # Errors
+    /// errors for unclosed blocks
+    #[allow(clippy::result_unit_err, clippy::too_many_lines)]
+    pub fn parse_with_options(
+        on: &'a str,
+        options: ParseOptions,
+        container_residue: ContainerResidue<'a>,
+        cb: F,
+    ) -> Result<(), MarkdownParseError<T>> {
+        let mut parser = MarkdownParser {
+            reader: utilities::EdibleLines::new(on),
+            state: State::None,
+            options,
+            cb,
+            container_residue,
         };
-
-        if trimmed.is_empty() {
-            MarkdownElement::Empty
-        } else if let "---" = trimmed {
-            MarkdownElement::HorizontalRule
-        } else if trimmed.starts_with('>') {
-            MarkdownElement::Quote(QuoteBlock {
-                alert: None,
-                inner: trimmed,
-            })
-        } else if trimmed.starts_with('#') {
-            let level = trimmed.chars().take_while(|c| *c == '#').count();
-            // TODO trim of trailing `#`s
-            let content = trimmed[level..].trim();
-            if trimmed[level..].starts_with(char::is_whitespace) {
-                MarkdownElement::Heading {
-                    level: level.try_into().expect("deep header"),
-                    content: RawText(content),
-                }
-            } else {
-                // Fix for tags
-                MarkdownElement::Paragraph(RawText(trimmed))
-            }
-        } else if let Some(trimmed) = trimmed.trim_start().strip_prefix(list_prefixes) {
-            // TODO one or the other
-            let level = item.chars().take_while(|c| *c == '\t' || *c == ' ').count();
-            let (checked, trimmed) = if let Some(left) = trimmed.trim_start().strip_prefix("[x]") {
-                (Some(true), left)
-            } else if let Some(left) = trimmed.trim_start().strip_prefix("[ ]") {
-                (Some(false), left)
-            } else {
-                (None, trimmed.trim())
-            };
-
-            MarkdownElement::ListItem {
-                level: level.try_into().expect("deep list item"),
-                content: RawText(trimmed),
-                enumerated: false,
-                checked,
-            }
-        } else if let Some(trimmed) = utilities::strip_number_prefix(trimmed) {
-            let level = item.chars().take_while(|c| *c == '\t' || *c == ' ').count();
-            MarkdownElement::ListItem {
-                // TODO take number
-                level: level.try_into().expect("deep list item"),
-                content: RawText(trimmed.trim()),
-                enumerated: true,
-                checked: None,
-            }
-        } else {
-            MarkdownElement::Paragraph(RawText(trimmed))
+        while let Some(section) = parser.reader.next() {
+            parser.classify_section(section)?;
         }
+        if !matches!(parser.state, State::None) {
+            eprintln!("TODO state {state:?} error", state = parser.state);
+        }
+        Ok(())
     }
 
-    #[derive(Clone, Copy, Debug)]
-    enum State<'a> {
-        None,
-        CodeBlock {
-            language: &'a str,
-            delimeter: &'a str,
-        },
-        Command {
-            name: &'a str,
-            arguments: &'a str,
-        },
-        Frontmatter,
-        Table,
-        MathematicsBlock,
-        MarkdownComment,
-        CommandHeader,
-        Quote {
-            alert: Option<&'a str>,
-        },
-        HTMLElement {
-            tag_name: &'a str,
-            // FUTURE a bit of a hack
-            depth: usize,
-        },
-    }
-
-    // TODO explain difference between upto last_line and end...
-    let mut upto = 0;
-    let mut last_line = 0;
-
-    let mut state = State::None;
-
-    let char_indices = on.char_indices().chain([(on.len(), '\n')]);
-
-    for (idx, chr) in char_indices {
-        if let '\n' = chr {
-            let mut line = &on[last_line..idx];
-            if let State::None = state {
-                // FUTURE needs improving
-                let continuation = line.starts_with(|chr: char| chr.is_alphabetic())
-                    && (line.trim_end().ends_with('\\')
-                        || on.get((idx + 1)..).is_some_and(|rest| {
-                            utilities::strip_upto_three_spaces(rest)
-                                .starts_with(|chr: char| chr.is_alphanumeric())
-                        }));
-
-                if continuation {
-                    continue;
+    fn classify_section(&mut self, section: &'a str) -> Result<(), MarkdownParseError<T>> {
+        macro_rules! invoke {
+            ($element:expr) => {
+                if let Err(err) = (self.cb)($element) {
+                    return Err(MarkdownParseError::FromCallback(err));
+                } else {
+                    self.state = State::None;
+                    self.reader.moving_on();
                 }
-                if on[last_line..].is_empty() {
-                    break;
+            };
+        }
+
+        let line = section.lines().next_back().unwrap_or(section);
+        let line = self.container_residue.strip_prefix(line);
+
+        match self.state {
+            State::Quote { alert } => {
+                let peek = self.reader.peek_line();
+                if peek
+                    .map(str::trim_start)
+                    .map(|line| self.container_residue.strip_prefix(line))
+                    .is_none_or(|line| line.is_empty() || line.starts_with('#'))
+                {
+                    let quote_block = QuoteBlock {
+                        alert,
+                        inner: RawMarkdown(section, self.container_residue),
+                    };
+                    invoke!(MarkdownElement::Quote(quote_block));
                 }
             }
-
-            for _ in 0..quote_depth {
-                // FUTURE unwrap?
-                line = line.strip_prefix('>').unwrap_or(line);
-            }
-
-            // This is done here because more might need to present here
-            if let State::CodeBlock {
-                language: _,
-                delimeter: "    ",
-            } = state
-            {
-                let r#continue =
-                    line.is_empty() || line.starts_with("    ") || line.starts_with('\t');
-                if r#continue {
-                    last_line = idx + '\n'.len_utf8();
-                    continue;
+            State::List => {
+                let peek = self.reader.peek_line();
+                if peek
+                    .map(str::trim_start)
+                    .map(|line| self.container_residue.strip_prefix(line))
+                    .is_none_or(|line| line.is_empty() || line.starts_with('#'))
+                {
+                    let list = List(RawMarkdown(section, self.container_residue));
+                    invoke!(MarkdownElement::List(list));
                 }
-
-                // Important that take is done to reset option
-                let code_block = MarkdownElement::CodeBlock(CodeBlock {
-                    language: "",
-                    code: &on[upto..last_line],
-                });
-                cb(code_block).map_err(MarkdownParseError::FromCallback)?;
-                upto = last_line;
-                state = State::None;
             }
-
-            match state {
-                State::Quote { alert } => {
-                    if line.starts_with("> ") {
-                        last_line = idx + '\n'.len_utf8();
-                        continue;
-                    }
-                    let inner = &on[upto..idx].trim_end();
-                    let quote_block = QuoteBlock { alert, inner };
-                    cb(MarkdownElement::Quote(quote_block))
-                        .map_err(MarkdownParseError::FromCallback)?;
-                    upto = last_line;
-                    state = State::None;
-                }
-                State::CodeBlock {
-                    language,
-                    delimeter,
-                } => {
-                    if line.starts_with(delimeter) {
-                        // Important that take is done to reset option
-                        let code_block = MarkdownElement::CodeBlock(CodeBlock {
-                            language,
-                            code: &on[upto..last_line],
+            State::CodeBlock {
+                language,
+                delimeter,
+            } => {
+                let code = if let "    " = delimeter {
+                    let r#continue = self
+                        .reader
+                        .peek_line()
+                        .map(|line| self.container_residue.strip_prefix(line))
+                        .is_some_and(|line| {
+                            line.is_empty() || line.starts_with("    ") || line.starts_with('\t')
                         });
-                        cb(code_block).map_err(MarkdownParseError::FromCallback)?;
-                        upto = last_line;
-                        state = State::None;
-                    }
+                    (!r#continue).then_some((true, section))
+                } else if line.trim_end() == delimeter {
+                    Some((false, section.rsplit_once("\n").unwrap().0))
+                } else {
+                    None
+                };
+                if let Some((indented_block, code)) = code {
+                    let code_block = CodeBlock {
+                        language,
+                        indented_block,
+                        code: code.trim_end(),
+                    };
+                    invoke!(MarkdownElement::CodeBlock(code_block));
                 }
-                State::Command { name, arguments } => {
-                    if let Some(command_line) = utilities::strip_surrounds(line, "{%", "%}") {
-                        let is_command = command_line
-                            .trim()
-                            .strip_prefix('/')
-                            .is_some_and(|command| name == command);
+            }
+            State::Command { name, arguments } => {
+                if let Some(command_line) = utilities::strip_surrounds(line, "{%", "%}") {
+                    let is_end_of_current_command = command_line
+                        .trim()
+                        .strip_prefix('/')
+                        .is_some_and(|command| name == command);
 
-                        if is_command {
-                            let command_block = MarkdownElement::CommandBlock(CommandBlock {
-                                name,
-                                arguments,
-                                inner: RawMarkdown(&on[upto..last_line]),
-                            });
-                            cb(command_block).map_err(MarkdownParseError::FromCallback)?;
-                            upto = last_line;
-                            state = State::None;
-                        }
-                    }
-                }
-                State::MathematicsBlock => {
-                    if let "$$" = line.trim() {
-                        let mathematics_block = MarkdownElement::BlockMathematics {
-                            script: on[upto..last_line].trim(),
+                    if is_end_of_current_command {
+                        let (inner, _) = section.rsplit_once("\n").unwrap();
+                        let inner = RawMarkdown(inner, Default::default());
+                        let command_block = CommandBlock {
+                            name,
+                            arguments,
+                            inner,
                         };
-                        cb(mathematics_block).map_err(MarkdownParseError::FromCallback)?;
-                        upto = last_line;
-                        state = State::None;
+                        invoke!(MarkdownElement::CommandBlock(command_block));
                     }
                 }
-                State::MarkdownComment => {
-                    if line.trim_end().ends_with("%%") {
-                        let comment_block =
-                            MarkdownElement::CommentBlock(on[upto..last_line].trim());
-                        cb(comment_block).map_err(MarkdownParseError::FromCallback)?;
-                        upto = last_line;
-                        state = State::None;
+            }
+            State::MathematicsBlock => {
+                if let "$$" = line.trim() {
+                    let (script, _) = section.rsplit_once("\n").unwrap();
+                    let mathematics_block = BlockMathematics(script);
+                    invoke!(MarkdownElement::BlockMathematics(mathematics_block));
+                }
+            }
+            State::MarkdownComment => {
+                if line.trim_end().ends_with("%%") {
+                    let (comment, _) = section.rsplit_once("\n").unwrap();
+                    invoke!(MarkdownElement::CommentBlock(comment));
+                }
+            }
+            State::CommandHeader => {
+                if let Some(command_line) = line.strip_prefix("%}") {
+                    if let Some(command_line) = command_line.strip_suffix('/') {
+                        let (current_command, arguments) =
+                            command_line.split_once(' ').unwrap_or((command_line, ""));
+                        let command_block = CommandBlock {
+                            name: current_command,
+                            arguments,
+                            inner: RawMarkdown("", Default::default()),
+                        };
+                        invoke!(MarkdownElement::CommandBlock(command_block));
+                    } else {
+                        let (name, arguments) =
+                            command_line.split_once(' ').unwrap_or((command_line, ""));
+                        self.state = State::Command { name, arguments };
                     }
                 }
-                State::CommandHeader => {
-                    if let Some(command_line) = line.strip_prefix("%}") {
-                        if let Some(command_line) = command_line.strip_suffix('/') {
-                            let (current_command, arguments) =
-                                command_line.split_once(' ').unwrap_or((command_line, ""));
-                            let command_block = MarkdownElement::CommandBlock(CommandBlock {
-                                name: current_command,
-                                arguments,
-                                inner: RawMarkdown(""),
-                            });
-                            cb(command_block).map_err(MarkdownParseError::FromCallback)?;
-                            upto = last_line;
-                            state = State::None;
-                        } else {
-                            let (name, arguments) =
-                                command_line.split_once(' ').unwrap_or((command_line, ""));
-                            state = State::Command { name, arguments };
-                        }
+            }
+            State::Table => {
+                if self
+                    .reader
+                    .peek_line()
+                    .is_none_or(|line| !line.trim_end().ends_with('|'))
+                {
+                    let table = Table(section.trim());
+                    invoke!(MarkdownElement::Table(table));
+                }
+            }
+            State::Frontmatter => {
+                if let "---" = line.trim() {
+                    let frontmatter = Frontmatter(&section);
+                    invoke!(MarkdownElement::Frontmatter(frontmatter));
+                }
+            }
+            State::HTMLElement { tag_name } => {
+                if line.trim_end().ends_with('>') {
+                    let is_comment_end = tag_name == "!--" && line.ends_with("-->");
+                    let is_tag_end = line
+                        .rsplit_once("</")
+                        .and_then(|(_, rest)| rest.strip_suffix('>'))
+                        .is_some_and(|item| item == tag_name);
+                    let html_balanced = utilities::html_balanced(section, tag_name);
+                    if is_comment_end || (is_tag_end && html_balanced) {
+                        let element = HTMLElement(section);
+                        invoke!(MarkdownElement::HTMLElement(element));
                     }
                 }
-                State::Table => {
-                    if !line.trim_end().ends_with('|') {
-                        let table = MarkdownElement::Table(Table(on[upto..last_line].trim()));
-                        cb(table).map_err(MarkdownParseError::FromCallback)?;
-                        state = State::None;
-                    }
-                }
-                State::Frontmatter => {
-                    let is_horizontal_rule = "---" == line.trim();
-                    if is_horizontal_rule {
-                        let frontmatter =
-                            MarkdownElement::Frontmatter(Frontmatter(&on[upto..last_line]));
-                        cb(frontmatter).map_err(MarkdownParseError::FromCallback)?;
-                        state = State::None;
-                        upto = idx + 1;
-                    }
-                }
-                State::HTMLElement {
-                    tag_name,
-                    ref mut depth,
-                } => {
-                    let line = line.trim_end();
-                    if let (0, Some(line)) = (*depth, line.strip_suffix('>')) {
-                        let element = MarkdownElement::HTMLElement(HTMLElement(&on[upto..idx]));
-                        let is_comment = tag_name == "!--" && line.ends_with("-->");
-                        let r#yield = is_comment
-                            || line
-                                .rfind("</")
-                                .is_some_and(|close| &line[2..][close..] == tag_name);
-                        if r#yield {
-                            cb(element).map_err(MarkdownParseError::FromCallback)?;
-                            state = State::None;
-                            upto = idx + 1;
-                            last_line = idx + '\n'.len_utf8();
-                            continue;
-                        }
-                    }
+            }
+            State::None => {
+                let list_prefixes: &[char] =
+                    if self.options.allow_asterisk_and_plus_as_list_prefixes {
+                        EXTENDED_LIST_PREFIXES
+                    } else {
+                        BASIC_LIST_PREFIXES
+                    };
 
-                    // FUTURE needs improving
-                    for (idx, _) in line.match_indices("<") {
-                        let rest = &line[idx..];
-                        let (check, new) = if rest.starts_with("</") {
-                            (&rest[2..], depth.saturating_sub(1))
-                        } else {
-                            (&rest[1..], *depth + 1)
-                        };
-                        let out = check
-                            .split_once(|chr: char| !chr.is_alphanumeric())
-                            .map_or(rest, |(l, _)| l);
-                        if out == tag_name {
-                            *depth = new;
-                        }
+                let is_code_block = line.starts_with("```")
+                    || (self.options.tilda_code_blocks && line.starts_with("~~~"));
+                if is_code_block {
+                    let delimeter_char = line.chars().next().unwrap();
+                    let matching = line
+                        .find(|c: char| c != delimeter_char)
+                        .unwrap_or(line.len());
+                    // For nesting
+                    let delimeter = &line[..matching];
+                    // TODO other motifiers here?
+                    let language = &line[matching..].trim();
+                    self.reader.moving_on();
+                    self.state = State::CodeBlock {
+                        delimeter,
+                        language,
+                    };
+                } else if self.options.indented_code_blocks && line.starts_with("    ") {
+                    self.state = State::CodeBlock {
+                        delimeter: "    ",
+                        language: "",
+                    };
+                } else if let "$$" = line.trim() {
+                    self.state = State::MathematicsBlock;
+                    self.reader.moving_on();
+                } else if line.starts_with('|') {
+                    self.state = State::Table;
+                } else if let Some(inner) = line.strip_prefix('>') {
+                    let alert = utilities::strip_surrounds(inner, "[!", "]");
+                    if alert.is_some() {
+                        self.reader.moving_on();
                     }
-                }
-                State::None => {
-                    if line.starts_with("```")
-                        || (options.tilda_code_blocks && line.starts_with("~~~"))
+                    // TODO what to do here
+                    if self
+                        .reader
+                        .peek_line()
+                        .is_some_and(|line| line.trim_start().starts_with('>'))
                     {
-                        let delimeter_char = line.chars().next().unwrap();
-                        let matching = line
-                            .find(|c: char| c != delimeter_char)
-                            .unwrap_or(line.len());
-                        // For nesting
-                        let delimeter = &line[..matching];
-                        // TODO other motifiers here?
-                        let language = &line[matching..].trim();
-                        state = State::CodeBlock {
-                            delimeter,
-                            language,
+                        self.state = State::Quote { alert };
+                    } else {
+                        let quote_block = QuoteBlock {
+                            alert,
+                            inner: RawMarkdown(section, Default::default()),
                         };
-                        upto = idx + '\n'.len_utf8();
-                    } else if options.indented_code_blocks && line.starts_with("    ") {
-                        state = State::CodeBlock {
-                            delimeter: "    ",
-                            language: "",
-                        };
-                        upto = last_line;
-                    } else if let "$$" = line.trim() {
-                        state = State::MathematicsBlock;
-                        upto = idx + '\n'.len_utf8();
-                    } else if line.starts_with('|') {
-                        state = State::Table;
-                        upto = last_line;
-                    } else if let Some(inner) = line.strip_prefix('>') {
-                        let alert = utilities::strip_surrounds(inner, "[!", "]");
-                        if alert.is_some() {
-                            upto = idx + 1;
-                        }
-                        state = State::Quote { alert };
-                    } else if let Some(rest) = line.strip_prefix('<') {
-                        let trimmed = line.trim_end();
-                        if rest.starts_with("!--") {
-                            if trimmed.ends_with("-->") {
-                                let element =
-                                    MarkdownElement::HTMLElement(HTMLElement(&on[upto..idx]));
-                                cb(element).map_err(MarkdownParseError::FromCallback)?;
-                                state = State::None;
-                                upto = idx + 1;
-                            } else {
-                                state = State::HTMLElement {
-                                    tag_name: "!--",
-                                    depth: 0,
-                                }
-                            }
+                        invoke!(MarkdownElement::Quote(quote_block));
+                    }
+                } else if let Some(rest) = line.strip_prefix('<') {
+                    let trimmed = line.trim_end();
+                    if rest.starts_with("!--") {
+                        if trimmed.ends_with("-->") {
+                            let element = HTMLElement(line);
+                            invoke!(MarkdownElement::HTMLElement(element));
                         } else {
-                            let tag_name = rest
-                                .split_once(|chr: char| !chr.is_alphanumeric())
-                                .map_or(rest, |(l, _)| l);
-                            let single_line = trimmed.strip_suffix('>').is_some_and(|rest| {
-                                rest.rfind("</")
-                                    .is_some_and(|idx| &rest[2..][idx..] == tag_name)
-                            });
-
-                            if single_line {
-                                let element =
-                                    MarkdownElement::HTMLElement(HTMLElement(&on[upto..idx]));
-                                cb(element).map_err(MarkdownParseError::FromCallback)?;
-                                state = State::None;
-                                upto = idx + 1;
-                            } else {
-                                state = State::HTMLElement { tag_name, depth: 0 };
-                            }
-                        }
-                    } else if let Some(line) = line.trim_start().strip_prefix("%%") {
-                        if let Some(out) = line.trim_end().strip_suffix("%%") {
-                            let comment_block = MarkdownElement::CommentBlock(out.trim());
-                            cb(comment_block).map_err(MarkdownParseError::FromCallback)?;
-                        } else {
-                            state = State::MarkdownComment;
-                            upto = idx + '\n'.len_utf8();
-                        }
-                    } else if upto == 0 && "---" == line.trim() {
-                        state = State::Frontmatter;
-                        upto = idx + '\n'.len_utf8();
-                    } else if let Some(line) = line.strip_prefix("{%").map(str::trim_end) {
-                        if let Some(command_line) = line.strip_suffix("/%}").map(str::trim) {
-                            let (current_command, arguments) =
-                                command_line.split_once(' ').unwrap_or((command_line, ""));
-                            let command_block = MarkdownElement::CommandBlock(CommandBlock {
-                                name: current_command,
-                                arguments,
-                                inner: RawMarkdown(""),
-                            });
-                            cb(command_block).map_err(MarkdownParseError::FromCallback)?;
-                            upto = idx;
-                        } else if let Some(command_line) = line.strip_suffix("%}").map(str::trim) {
-                            upto = idx;
-                            let (name, arguments) =
-                                command_line.split_once(' ').unwrap_or((command_line, ""));
-                            state = State::Command { name, arguments };
-                        } else {
-                            state = State::CommandHeader;
+                            self.state = State::HTMLElement { tag_name: "!--" }
                         }
                     } else {
-                        if options.heading_underscores
-                            && !line.trim().is_empty()
-                            && utilities::strip_upto_one_new_line(&on[idx..]).starts_with("---")
-                        {
-                            let header = MarkdownElement::Heading {
-                                // FUTURE I think
-                                level: 1,
-                                content: RawText(line),
-                            };
-                            // FUTURE I think this can break
-                            upto = idx + '\n'.len_utf8() + "---".len();
-                            last_line = upto;
-                            cb(header).map_err(MarkdownParseError::FromCallback)?;
-                            continue;
+                        let tag_name = rest
+                            .split_once(|chr: char| !chr.is_alphanumeric())
+                            .map_or(rest, |(l, _)| l);
+                        let single_line = trimmed.strip_suffix('>').is_some_and(|rest| {
+                            rest.rfind("</")
+                                .is_some_and(|idx| &rest[2..][idx..] == tag_name)
+                        });
+
+                        if single_line {
+                            let element = HTMLElement(line);
+                            invoke!(MarkdownElement::HTMLElement(element));
+                        } else {
+                            self.state = State::HTMLElement { tag_name };
+                        }
+                    }
+                } else if let Some(line) = line.trim_start().strip_prefix("%%") {
+                    if let Some(out) = line.trim_end().strip_suffix("%%") {
+                        let comment_block = MarkdownElement::CommentBlock(out.trim());
+                        invoke!(comment_block);
+                    } else {
+                        self.state = State::MarkdownComment;
+                        self.reader.moving_on();
+                    }
+                } else if self.reader.is_at_start() && "---" == line.trim() {
+                    self.state = State::Frontmatter;
+                    self.reader.moving_on();
+                } else if let Some(line) = line.strip_prefix("{%").map(str::trim_end) {
+                    if let Some(command_line) = line.strip_suffix("/%}").map(str::trim) {
+                        let (current_command, arguments) =
+                            command_line.split_once(' ').unwrap_or((command_line, ""));
+                        let command_block = CommandBlock {
+                            name: current_command,
+                            arguments,
+                            inner: RawMarkdown("", Default::default()),
+                        };
+                        invoke!(MarkdownElement::CommandBlock(command_block));
+                    } else if let Some(command_line) = line.strip_suffix("%}").map(str::trim) {
+                        let (name, arguments) =
+                            command_line.split_once(' ').unwrap_or((command_line, ""));
+                        self.state = State::Command { name, arguments };
+                        self.reader.moving_on();
+                    } else {
+                        self.state = State::CommandHeader;
+                    }
+                } else if line
+                    .strip_prefix(list_prefixes)
+                    .or_else(|| utilities::strip_number_prefix(section))
+                    .is_some_and(|line| line.starts_with(char::is_whitespace))
+                {
+                    let peek = self.reader.peek_line();
+                    if peek
+                        .map(str::trim_start)
+                        .map(|line| self.container_residue.strip_prefix(line))
+                        .is_none_or(|line| line.is_empty() || line.starts_with('#'))
+                    {
+                        let list = List(RawMarkdown(section, self.container_residue));
+                        invoke!(MarkdownElement::List(list));
+                    } else {
+                        self.state = State::List;
+                    }
+                } else {
+                    let trimmed = line.trim();
+
+                    let item = if section.is_empty() {
+                        if !self.options.record_empty_lines {
+                            self.reader.moving_on();
+                            return Ok(());
+                        }
+                        MarkdownElement::Empty
+                    } else if let "---" = trimmed {
+                        MarkdownElement::HorizontalRule
+                    } else if trimmed.starts_with('>') {
+                        MarkdownElement::Quote(QuoteBlock {
+                            alert: None,
+                            inner: RawMarkdown(trimmed, Default::default()),
+                        })
+                    } else if trimmed.starts_with('#') {
+                        let level = trimmed.chars().take_while(|c| *c == '#').count();
+                        // TODO trim of trailing `#`s
+                        let content = trimmed[level..].trim();
+                        if trimmed[level..].starts_with(char::is_whitespace) {
+                            MarkdownElement::Heading {
+                                level: level.try_into().expect("deep header"),
+                                content: RawText(content, self.container_residue),
+                            }
+                        } else {
+                            // Fix for tags
+                            MarkdownElement::Paragraph(RawText(trimmed, self.container_residue))
+                        }
+                    } else if self.options.heading_underscores
+                        && self
+                            .reader
+                            .peek_line()
+                            .is_some_and(|line| line.trim_end() == "---")
+                    {
+                        self.reader.skip_next();
+                        // Important that it is the section
+                        let content = RawText(section, self.container_residue);
+                        MarkdownElement::Heading {
+                            // TODO?
+                            level: 1,
+                            content,
+                        }
+                    } else {
+                        let continuation = line.trim_end().ends_with('\\')
+                            || self
+                                .reader
+                                .peek_line()
+                                .map(utilities::strip_upto_three_spaces)
+                                .is_some_and(|rest| rest.starts_with(char::is_alphanumeric));
+
+                        if continuation {
+                            return Ok(());
                         }
 
-                        let item = classify_line(line, options);
-                        let skip =
-                            !options.record_empty_lines && matches!(item, MarkdownElement::Empty);
-                        if !skip {
-                            cb(item).map_err(MarkdownParseError::FromCallback)?;
-                        }
-                        upto = idx + '\n'.len_utf8();
-                    }
+                        MarkdownElement::Paragraph(RawText(section.trim(), self.container_residue))
+                    };
+
+                    invoke!(item);
                 }
             }
-
-            last_line = idx + '\n'.len_utf8();
         }
+        Ok(())
     }
-
-    if !matches!(state, State::None) {
-        eprintln!("TODO state {state:?} error");
-    }
-
-    Ok(())
 }
 
 #[derive(Debug, PartialEq, Eq, Default, Clone, Copy)]
@@ -594,7 +584,8 @@ pub enum MarkdownPart<'a> {
     MediaLink {
         source: &'a str,
     },
-    HTMLElement,
+    LineBreak,
+    HTMLElement(HTMLElement<'a>),
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -605,22 +596,23 @@ pub struct MarkdownTextElement<'a> {
 }
 
 /// Abstraction for iterating over markdown content sections giving decoration (bold, links, etc) information
+/// TODO I think this needs paragraph stripping
 #[allow(clippy::struct_excessive_bools)]
 pub struct PartsIterator<'a> {
     on: &'a str,
-    // Internal state
     last: usize,
-    // Decoration state
     decoration: TextDecoration,
+    container_residue: ContainerResidue<'a>,
 }
 
 impl<'a> PartsIterator<'a> {
     #[must_use]
-    pub fn new(on: &'a str) -> Self {
+    pub fn new(on: &'a str, container_residue: ContainerResidue<'a>) -> Self {
         Self {
-            on: on.trim_start(),
+            on: container_residue.strip_prefix(on).trim(),
             last: 0,
             decoration: TextDecoration::default(),
+            container_residue,
         }
     }
 }
@@ -686,8 +678,20 @@ impl<'a> Iterator for PartsIterator<'a> {
                         kind: MarkdownPart::Tag,
                     })
                 }
+                '\\' if utilities::starts_with_new_line_sequence(&range[1..]) => {
+                    self.last += 1 + utilities::count_new_line_sequence(&range[1..]);
+                    self.last += self
+                        .container_residue
+                        .count_skippable(&self.on[self.last..]);
+                    Some(MarkdownTextElement {
+                        on: "",
+                        decoration: self.decoration,
+                        kind: MarkdownPart::LineBreak,
+                    })
+                }
                 '{' => {
                     let mut brace_depth: u8 = 0;
+                    // TODO move
                     for (idx, matched) in after.match_indices(&['{', '}']) {
                         brace_depth = match matched {
                             "}" => brace_depth.saturating_sub(1),
@@ -741,12 +745,12 @@ impl<'a> Iterator for PartsIterator<'a> {
                         let Some(idx) = range.find("-->") else {
                             todo!("no end to comment found. return error")
                         };
-                        self.last += idx + 3;
                         let inner = &range[..(idx + 3)];
+                        self.last += idx + 3;
                         Some(MarkdownTextElement {
-                            on: inner,
+                            on: "",
                             decoration: self.decoration,
-                            kind: MarkdownPart::HTMLElement,
+                            kind: MarkdownPart::HTMLElement(HTMLElement(inner)),
                         })
                     } else {
                         let tag_name =
@@ -775,9 +779,9 @@ impl<'a> Iterator for PartsIterator<'a> {
                         let inner = &range[..last_idx];
                         self.last += last_idx;
                         Some(MarkdownTextElement {
-                            on: inner,
+                            on: "",
                             decoration: self.decoration,
-                            kind: MarkdownPart::HTMLElement,
+                            kind: MarkdownPart::HTMLElement(HTMLElement(inner)),
                         })
                     }
                 }
@@ -834,78 +838,86 @@ impl<'a> Iterator for PartsIterator<'a> {
                     for (idx, chr) in range.char_indices() {
                         if escaped {
                             escaped = false;
-                        } else {
-                            let mut offset = idx;
-                            let current_decoration = self.decoration;
-                            let r#yield = match chr {
-                                '$' | '`' | '#' | '{' | '[' => true,
-                                '!' => range[idx..].starts_with("!["),
-                                ':' => range[idx..]
-                                    .chars()
-                                    .nth(1)
-                                    .is_some_and(char::is_alphanumeric),
-                                '_' | '*' => {
-                                    // FUTURE lots invalid here
-                                    let left = &range[idx..];
-                                    if left.starts_with("___") || left.starts_with("***") {
-                                        self.decoration ^= TextDecoration::BOLD;
-                                        self.decoration ^= TextDecoration::EMPHASIS;
-                                        offset += 3;
-                                    } else if left.starts_with("__") || left.starts_with("**") {
-                                        self.decoration ^= TextDecoration::BOLD;
-                                        offset += 2;
-                                    } else {
-                                        self.decoration ^= TextDecoration::EMPHASIS;
-                                        offset += 1;
-                                    }
-                                    true
-                                }
-                                '^' => {
-                                    self.decoration ^= TextDecoration::SUPERSCRIPT;
-                                    offset += 1;
-                                    true
-                                }
-                                '~' => {
-                                    if range[idx..].starts_with("~~") {
-                                        self.decoration ^= TextDecoration::STRIKETHROUGH;
-                                        offset += 2;
-                                    } else {
-                                        self.decoration ^= TextDecoration::SUBSCRIPT;
-                                        offset += 1;
-                                    }
-                                    true
-                                }
-                                '<' => range[idx..][1..].starts_with(|chr: char| {
-                                    chr.is_alphanumeric() || matches!(chr, '!')
-                                }),
-                                '=' if range[idx..].starts_with("==") => {
-                                    self.decoration ^= TextDecoration::HIGHLIGHTED;
-                                    offset += 2;
-                                    true
-                                }
-                                _ => false,
-                            };
-                            if r#yield {
-                                self.last += offset;
-                                return if range[..idx].is_empty() {
-                                    // cheeky way to jump to top
-                                    self.next()
-                                } else {
-                                    Some(MarkdownTextElement {
-                                        on: &range[..idx],
-                                        decoration: current_decoration,
-                                        kind,
-                                    })
-                                };
-                            }
-                            escaped = chr == '\\';
+                            continue;
                         }
+                        let mut offset = idx;
+                        let current_decoration = self.decoration;
+                        let left = &range[idx..];
+                        let r#yield = match chr {
+                            '$' | '`' | '#' | '{' | '[' => true,
+                            '!' => left.starts_with("!["),
+                            ':' => left.chars().nth(1).is_some_and(char::is_alphanumeric),
+                            '_' | '*' => {
+                                // FUTURE lots invalid here
+                                if left.starts_with("___") || left.starts_with("***") {
+                                    self.decoration ^= TextDecoration::BOLD;
+                                    self.decoration ^= TextDecoration::EMPHASIS;
+                                    offset += 3;
+                                } else if left.starts_with("__") || left.starts_with("**") {
+                                    self.decoration ^= TextDecoration::BOLD;
+                                    offset += 2;
+                                } else {
+                                    self.decoration ^= TextDecoration::EMPHASIS;
+                                    offset += 1;
+                                }
+                                true
+                            }
+                            '^' => {
+                                self.decoration ^= TextDecoration::SUPERSCRIPT;
+                                offset += 1;
+                                true
+                            }
+                            '~' => {
+                                if left.starts_with("~~") {
+                                    self.decoration ^= TextDecoration::STRIKETHROUGH;
+                                    offset += 2;
+                                } else {
+                                    self.decoration ^= TextDecoration::SUBSCRIPT;
+                                    offset += 1;
+                                }
+                                true
+                            }
+                            '<' => left[1..].starts_with(|chr: char| {
+                                chr.is_alphanumeric() || matches!(chr, '!')
+                            }),
+                            '=' if left.starts_with("==") => {
+                                self.decoration ^= TextDecoration::HIGHLIGHTED;
+                                offset += 2;
+                                true
+                            }
+                            '\\' => utilities::starts_with_new_line_sequence(&left[1..]),
+                            '\r' | '\n' if utilities::starts_with_new_line_sequence(&left) => {
+                                let new_line_character_count =
+                                    utilities::count_new_line_sequence(&left);
+                                offset += new_line_character_count
+                                    + self
+                                        .container_residue
+                                        .count_skippable(&left[new_line_character_count..]);
+                                true
+                            }
+                            _ => false,
+                        };
+                        if r#yield {
+                            self.last += offset;
+                            return if range[..idx].is_empty() {
+                                // cheeky way to jump to top
+                                // TODO this can cause recursion
+                                self.next()
+                            } else {
+                                Some(MarkdownTextElement {
+                                    on: &range[..idx],
+                                    decoration: current_decoration,
+                                    kind,
+                                })
+                            };
+                        }
+                        escaped = chr == '\\';
                     }
 
                     self.last = self.on.len();
 
                     if !self.decoration.is_empty() {
-                        eprintln!("error {:?}", self.decoration);
+                        eprintln!("error during parts: {:?}", self.decoration);
                     }
 
                     if range.trim().is_empty() {
@@ -923,74 +935,138 @@ impl<'a> Iterator for PartsIterator<'a> {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct RawMarkdown<'a>(pub &'a str);
+#[derive(Debug, Copy, Clone)]
+pub struct RawMarkdown<'a>(pub &'a str, pub ContainerResidue<'a>);
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone)]
 pub struct Table<'a>(pub &'a str);
 
-impl<'a> Table<'a> {
-    pub fn rows(&self) -> impl Iterator<Item = TableRow<'a>> {
-        let mut lines = self.0.lines();
-        let header = lines.next().expect("no heading (empty table)");
-        std::iter::once(TableRow(header)).chain(lines.skip(1).map(TableRow))
-    }
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct TableRow<'a>(pub(crate) &'a str);
-
-impl<'a> TableRow<'a> {
-    pub fn cells(&self) -> impl Iterator<Item = crate::RawText<'a>> {
-        let inner = &self.0[1..(self.0.len() - 1)];
-        inner.split('|').map(crate::RawText)
-    }
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone)]
 pub struct CommandBlock<'a> {
     pub name: &'a str,
     pub arguments: &'a str,
     pub inner: RawMarkdown<'a>,
 }
 
-impl<'a> CommandBlock<'a> {
-    #[must_use]
-    #[allow(clippy::collapsible_else_if)]
-    pub fn parse_arguments(&self) -> Vec<(&'a str, &'a str)> {
-        crate::utilities::parse_arguments(self.arguments)
-    }
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone)]
 pub struct Frontmatter<'a>(pub &'a str);
 
-impl Frontmatter<'_> {
-    #[cfg(feature = "yaml")]
-    pub fn parse_yaml(
-        &self,
-        cb: impl for<'b> FnMut(
-            &'b [simple_yaml_parser::YAMLKey<'_>],
-            simple_yaml_parser::RootYAMLValue<'_>,
-        ),
-    ) -> Result<(), simple_yaml_parser::YAMLParseError> {
-        simple_yaml_parser::parse(self.0, cb)
-    }
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone)]
 pub struct QuoteBlock<'a> {
     /// [See GitHub markdown alerts](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax#alerts).
     /// Note this allows any alerts. It does not check from a defined list
     pub alert: Option<&'a str>,
-    pub inner: &'a str,
+    pub inner: RawMarkdown<'a>,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone)]
 pub struct CodeBlock<'a> {
+    pub indented_block: bool,
     pub language: &'a str,
     pub code: &'a str,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone)]
 pub struct HTMLElement<'a>(pub &'a str);
+
+#[derive(Debug, Copy, Clone)]
+pub struct BlockMathematics<'a>(pub &'a str);
+
+#[derive(Debug, Copy, Clone)]
+pub struct List<'a>(pub(crate) RawMarkdown<'a>);
+
+#[derive(Debug, Copy, Clone)]
+pub struct ListItem<'a> {
+    pub content: RawMarkdown<'a>,
+    /// TODO probably need more options here
+    pub enumerated: bool,
+    /// from `- [x]` etc
+    pub checked: Option<bool>,
+}
+
+impl<'a> List<'a> {
+    pub fn parse_inner(&self, mut cb: impl FnMut(crate::ListItem<'a>)) {
+        let mut lines = utilities::EdibleLines::new(self.0 .0);
+        while let Some(section) = lines.next() {
+            let r#yield = lines
+                .peek_line()
+                .map(|line| self.0 .1.strip_prefix(line))
+                .is_none_or(|line| {
+                    line.is_empty()
+                        || line.starts_with(crate::EXTENDED_LIST_PREFIXES)
+                        || utilities::strip_number_prefix(line).is_some()
+                });
+            if r#yield {
+                let trimmed = section.trim_start();
+                let (content, enumerated) =
+                    if let Some(rest) = trimmed.strip_prefix(crate::EXTENDED_LIST_PREFIXES) {
+                        (rest, false)
+                    } else if let Some(rest) = utilities::strip_number_prefix(trimmed) {
+                        (rest, true)
+                    } else {
+                        unreachable!("{trimmed}")
+                    };
+                let trimmed = content.trim_start();
+                let after = section.len() - trimmed.len();
+                // WIP
+                let prefix = &section[..after].trim_start();
+                let (content, checked) = if let Some(rest) = trimmed.strip_prefix("[x]") {
+                    (rest, Some(true))
+                } else if let Some(rest) = trimmed.strip_prefix("[ ]") {
+                    (rest, Some(false))
+                } else {
+                    (content, None)
+                };
+                let content = RawMarkdown(content, ContainerResidue(prefix));
+                let list_item = crate::ListItem {
+                    content,
+                    enumerated,
+                    checked,
+                };
+                lines.moving_on();
+                cb(list_item)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default, Debug)]
+pub struct ContainerResidue<'a>(pub &'a str);
+
+impl<'a> ContainerResidue<'a> {
+    pub fn strip_prefix<'b>(&self, on: &'b str) -> &'b str {
+        let mut acc = 0;
+        if self.0.starts_with('-') {
+            return on.trim_start();
+        } else if self.0.starts_with('>') {
+            if let Some(after) = on.trim_start().strip_prefix('>') {
+                return after;
+            } else {
+                dbg!(self.0, on);
+                return on.trim_start();
+            }
+        } else if !self.0.is_empty() {
+            dbg!(self.0);
+        }
+        // for (idx, matched) in self.0.match_indices(&['>', '-']) {
+        //     for (n, c) in on[..idx].char_indices() {
+        //         if !c.is_whitespace() {
+        //             if on[idx..][n..].starts_with(matched) {
+        //                 acc = idx + 1;
+        //             } else {
+        //                 dbg!(&on[..idx], matched, &on[..idx][n..]);
+        //             }
+        //         } else {
+        //             dbg!(&on[..idx], matched, &on[..idx][n..]);
+        //             break;
+        //         }
+        //     }
+        // }
+        // dbg!(self, on, acc);
+        &on[acc..]
+    }
+
+    pub fn count_skippable<'b>(&self, on: &'b str) -> usize {
+        on.len() - self.strip_prefix(on).len()
+    }
+}

@@ -105,7 +105,7 @@ And another one
 ```
 
 ```
-Paragraph("This is text in a paragraph\nAnd another one")
+Paragraph([Plain("This is text in a paragraph"), Plain("And another one")])
 ```
 
 #### Continued paragraphs
@@ -120,7 +120,7 @@ in a paragraph
 ```
 
 ```
-Paragraph("This is text \\\nin a paragraph")
+Paragraph([Plain("This is text "), LineBreak, Plain("in a paragraph")])
 ```
 
 ### Lists
@@ -133,8 +133,7 @@ Items can be visually *grouped* as a with `-`
 ```
 
 ```
-ListItem { level: 0, enumerated: false, checked: None, content: "something" }
-ListItem { level: 0, enumerated: false, checked: None, content: "another thing" }
+List([ListItem { enumerated: false, checked: None, inner: "something" }, ListItem { enumerated: false, checked: None, inner: "another thing" }])
 ```
 
 #### Nesting
@@ -142,23 +141,18 @@ ListItem { level: 0, enumerated: false, checked: None, content: "another thing" 
 Using tab indentation we can add nest lists under lists
 
 ```md
-- something
-	- another thing
-		- z
-- Something
-	- x
-	- y
+- First item
+	- Nested one
+		- Deep
+- Second item
+	- One
+	- Two
 ```
 
 > The implementation is that each list item has a `depth` property
 
 ```
-ListItem { level: 0, enumerated: false, checked: None, content: "something" }
-ListItem { level: 1, enumerated: false, checked: None, content: "another thing" }
-ListItem { level: 2, enumerated: false, checked: None, content: "z" }
-ListItem { level: 0, enumerated: false, checked: None, content: "Something" }
-ListItem { level: 1, enumerated: false, checked: None, content: "x" }
-ListItem { level: 1, enumerated: false, checked: None, content: "y" }
+List([ListItem { enumerated: false, checked: None, inner: [Paragraph("First item"), List([ListItem { enumerated: false, checked: None, inner: "Nested one" }, ListItem { enumerated: false, checked: None, inner: "Deep" }])] }, ListItem { enumerated: false, checked: None, inner: [Paragraph("Second item"), List([ListItem { enumerated: false, checked: None, inner: "One" }, ListItem { enumerated: false, checked: None, inner: "Two" }])] }])
 ```
 
 %%
@@ -176,9 +170,7 @@ We can prefix with increasing numerals for enumerated lists
 ```
 
 ```
-ListItem { level: 0, enumerated: true, checked: None, content: "Hi" }
-ListItem { level: 0, enumerated: true, checked: None, content: "Something" }
-ListItem { level: 0, enumerated: true, checked: None, content: "X" }
+List([ListItem { enumerated: true, checked: None, inner: "Hi" }, ListItem { enumerated: true, checked: None, inner: "Something" }, ListItem { enumerated: true, checked: None, inner: "X" }])
 ```
 
 #### Checkboxes
@@ -189,8 +181,7 @@ ListItem { level: 0, enumerated: true, checked: None, content: "X" }
 ```
 
 ```
-ListItem { level: 0, enumerated: false, checked: Some(true), content: "Write specification" }
-ListItem { level: 0, enumerated: false, checked: Some(false), content: "Complete tests" }
+List([ListItem { enumerated: false, checked: Some(true), inner: "Write specification" }, ListItem { enumerated: false, checked: Some(false), inner: "Complete tests" }])
 ```
 
 #### Prefixes
@@ -203,8 +194,29 @@ ListItem { level: 0, enumerated: false, checked: Some(false), content: "Complete
 ```
 
 ```
-ListItem { level: 0, enumerated: false, checked: None, content: "hi" }
-ListItem { level: 0, enumerated: false, checked: None, content: "hello" }
+List([ListItem { enumerated: false, checked: None, inner: "hi" }, ListItem { enumerated: false, checked: None, inner: "hello" }])
+```
+
+#### Containing stylings
+
+```md
+- **Bold**
+- *Italic*
+```
+
+```
+List([ListItem { enumerated: false, checked: None, inner: [Plain("Bold", bold)] }, ListItem { enumerated: false, checked: None, inner: [Plain("Italic", emphasised)] }])
+```
+
+#### Containing elements
+
+```md
+- Something
+  > Something
+```
+
+```
+List([ListItem { enumerated: false, checked: None, inner: [Paragraph("Something"), QuoteBlock { inner: [Paragraph("Something")] }] }])
 ```
 
 ### Code blocks
@@ -220,7 +232,7 @@ code here
 ````
 
 ```
-CodeBlock { code: "code here" }
+CodeBlock { indented_block: false, code: "code here" }
 ```
 
 #### Languages
@@ -232,7 +244,7 @@ const x = 2;
 ````
 
 ```
-CodeBlock { language: "js", code: "const x = 2;" }
+CodeBlock { language: "js", indented_block: false, code: "const x = 2;" }
 ```
 
 #### With indent
@@ -249,7 +261,7 @@ Back to paragraph
 ```
 
 ```
-CodeBlock { code: "this is code\n    avoid this syntax\n\n    continued" }
+CodeBlock { indented_block: true, code: "this is code\n    avoid this syntax\n\n    continued" }
 Paragraph("Back to paragraph")
 ```
 
@@ -263,7 +275,7 @@ avoid this syntax
 ```
 
 ```
-CodeBlock { language: "js", code: "this is code\navoid this syntax" }
+CodeBlock { language: "js", indented_block: false, code: "this is code\navoid this syntax" }
 ```
 
 ### Mathematics blocks
@@ -277,7 +289,7 @@ $$
 ```
 
 ```
-BlockMathematics { script: "y=\\sin x" }
+BlockMathematics(BlockMathematics("y=\\sin x"))
 ```
 
 > This is expected to go through a `LaTeX` or equivalent compiler
@@ -734,7 +746,7 @@ Some text with <span id='workaround'>text</span> here <!-- comment here -->
 ```
 
 ```
-Paragraph([Plain("Some text with "), HTMLElement("<span id='workaround'>text</span>"), Plain(" here "), HTMLElement("<!-- comment here -->")])
+Paragraph([Plain("Some text with "), HTMLElement(HTMLElement("<span id='workaround'>text</span>")), Plain(" here "), HTMLElement(HTMLElement("<!-- comment here -->"))])
 ```
 
 ### Interpolation

@@ -12,10 +12,15 @@ fn as_lines(content: &str) -> String {
         tilda_code_blocks: true,
         record_empty_lines: false,
     };
-    let () = simple_markdown_parser::parse_with_options::<()>(content, options, 0, |item| {
-        writeln!(buf, "{item}", item = item.debug_with_options(true)).unwrap();
-        Ok(())
-    })
+    let () = simple_markdown_parser::parse_with_options::<()>(
+        content,
+        options,
+        Default::default(),
+        |item| {
+            writeln!(buf, "{item}", item = item.debug_with_options(true)).unwrap();
+            Ok(())
+        },
+    )
     .unwrap();
     buf
 }
