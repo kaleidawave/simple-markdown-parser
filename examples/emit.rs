@@ -12,12 +12,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut file = std::fs::File::create(out).unwrap();
 
-    let _ = simple_markdown_parser::extras::emit::markdown_to_html(
+    let _ = simple_markdown_parser::emit::markdown_to_html(
         &content,
         &mut file,
-        &mut simple_markdown_parser::extras::emit::BlankFeatureEmitter,
+        &mut simple_markdown_parser::emit::BlankFeatureEmitter,
         simple_markdown_parser::ParseOptions::default(),
-        0,
+        Default::default(),
     );
 
     Ok(())

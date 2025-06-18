@@ -64,35 +64,40 @@ fn format_markdown_content(content: &str) -> String {
     let mut buf = String::new();
     let mut last_was_block = ItemKind::Start;
 
-    simple_markdown_parser::parse_with_options::<()>(content, parse_options, 0, |item| {
-        use std::fmt::Write;
+    simple_markdown_parser::parse_with_options::<()>(
+        content,
+        parse_options,
+        Default::default(),
+        |item| {
+            use std::fmt::Write;
 
-        let item_is_block = match item {
-            simple_markdown_parser::MarkdownElement::ListItem { .. } => ItemKind::ListItem,
-            simple_markdown_parser::MarkdownElement::Paragraph(item) => {
-                // WIP
-                if item.0.starts_with("![") || item.0.starts_with("[![") {
-                    ItemKind::Media
-                } else {
-                    ItemKind::Other
+            let item_is_block = match item {
+                // simple_markdown_parser::MarkdownElement::ListItem { .. } => ItemKind::ListItem,
+                simple_markdown_parser::MarkdownElement::Paragraph(item) => {
+                    // WIP
+                    if item.0.starts_with("![") || item.0.starts_with("[![") {
+                        ItemKind::Media
+                    } else {
+                        ItemKind::Other
+                    }
                 }
+                _ => ItemKind::Other,
+            };
+            let should_add_line = match (last_was_block, item_is_block) {
+                (ItemKind::Start, _) => false,
+                (ItemKind::ListItem, ItemKind::ListItem) => false,
+                (ItemKind::Media, ItemKind::Media) => false,
+                _ => true,
+            };
+            if should_add_line {
+                write!(&mut buf, "{line_end}").unwrap();
             }
-            _ => ItemKind::Other,
-        };
-        let should_add_line = match (last_was_block, item_is_block) {
-            (ItemKind::Start, _) => false,
-            (ItemKind::ListItem, ItemKind::ListItem) => false,
-            (ItemKind::Media, ItemKind::Media) => false,
-            _ => true,
-        };
-        if should_add_line {
+            buf.push_str(&item.as_markdown(to_string_options));
+            last_was_block = item_is_block;
             write!(&mut buf, "{line_end}").unwrap();
-        }
-        buf.push_str(&item.as_markdown(to_string_options));
-        last_was_block = item_is_block;
-        write!(&mut buf, "{line_end}").unwrap();
-        Ok(())
-    })
+            Ok(())
+        },
+    )
     .unwrap();
 
     buf

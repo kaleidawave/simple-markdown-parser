@@ -25,48 +25,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut statistics = Statistics::default();
 
-    simple_markdown_parser::parse_with_options::<()>(content.as_str(), options, 0, |item| {
-        use simple_markdown_parser::MarkdownElement;
-        match item {
-            MarkdownElement::Heading {
-                level: 1,
-                content: _,
-            } => statistics.h1 += 1,
-            MarkdownElement::Heading {
-                level: 2,
-                content: _,
-            } => statistics.h2 += 1,
-            MarkdownElement::Heading {
-                level: 3,
-                content: _,
-            } => statistics.h3 += 1,
-            MarkdownElement::Heading {
-                level: 4,
-                content: _,
-            } => statistics.h4 += 1,
-            MarkdownElement::Heading {
-                level: 5,
-                content: _,
-            } => statistics.h5 += 1,
-            MarkdownElement::Heading {
-                level: 6,
-                content: _,
-            } => statistics.h6 += 1,
-            MarkdownElement::Paragraph(_) => statistics.paragraph += 1,
-            MarkdownElement::CodeBlock(cb) => {
-                statistics.codeblocks += 1;
-                *statistics
-                    .languages
-                    .entry(cb.language.to_owned())
-                    .or_default() += 1;
+    simple_markdown_parser::parse_with_options::<()>(
+        content.as_str(),
+        options,
+        Default::default(),
+        |item| {
+            use simple_markdown_parser::MarkdownElement;
+            match item {
+                MarkdownElement::Heading {
+                    level: 1,
+                    content: _,
+                } => statistics.h1 += 1,
+                MarkdownElement::Heading {
+                    level: 2,
+                    content: _,
+                } => statistics.h2 += 1,
+                MarkdownElement::Heading {
+                    level: 3,
+                    content: _,
+                } => statistics.h3 += 1,
+                MarkdownElement::Heading {
+                    level: 4,
+                    content: _,
+                } => statistics.h4 += 1,
+                MarkdownElement::Heading {
+                    level: 5,
+                    content: _,
+                } => statistics.h5 += 1,
+                MarkdownElement::Heading {
+                    level: 6,
+                    content: _,
+                } => statistics.h6 += 1,
+                MarkdownElement::Paragraph(_) => statistics.paragraph += 1,
+                MarkdownElement::CodeBlock(cb) => {
+                    statistics.codeblocks += 1;
+                    *statistics
+                        .languages
+                        .entry(cb.language.to_owned())
+                        .or_default() += 1;
+                }
+                MarkdownElement::Quote(_) => statistics.quote += 1,
+                // MarkdownElement::ListItem { .. } => statistics.list_items += 1,
+                MarkdownElement::CommentBlock(_) => {}
+                item => eprintln!("Not recording {item:?}"),
             }
-            MarkdownElement::Quote(_) => statistics.quote += 1,
-            MarkdownElement::ListItem { .. } => statistics.list_items += 1,
-            MarkdownElement::CommentBlock(_) => {}
-            item => eprintln!("Not recording {item:?}"),
-        }
-        Ok(())
-    })
+            Ok(())
+        },
+    )
     .unwrap();
 
     println!("{statistics:#?}");

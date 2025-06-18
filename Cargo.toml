@@ -9,10 +9,6 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
-[[example]]
-name = "markdown-query"
-path = "./examples/query.rs"
-
 [features]
 default = ["yaml"] # "html"
 # extras = []

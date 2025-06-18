@@ -22,7 +22,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // > Note that this is a relation not an equality. At the end of the transition we can have left over yellow.
         // "
-        "Some text with <span id='workaround'>text</span> here <!-- comment here -->".to_owned()
+        "#### `import.meta`
+
+> Thanks to [#141](https://github.com/kaleidawave/ezno/pull/141)
+
+> TODO link to special object
+
+### hiya"
+            .to_owned()
     };
 
     fn handler(item: simple_markdown_parser::MarkdownElement) -> Result<(), ()> {
@@ -32,7 +39,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut options = simple_markdown_parser::ParseOptions::default();
     options.heading_underscores = true;
-    let result = simple_markdown_parser::parse_with_options(content.as_str(), options, 0, handler);
+    let result = simple_markdown_parser::parse_with_options(
+        content.as_str(),
+        options,
+        Default::default(),
+        handler,
+    );
 
     match result {
         Ok(()) => {
