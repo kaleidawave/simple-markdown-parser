@@ -133,7 +133,16 @@ Items can be visually *grouped* as a with `-`
 ```
 
 ```
-List([ListItem { enumerated: false, checked: None, inner: "something" }, ListItem { enumerated: false, checked: None, inner: "another thing" }])
+List([
+	ListItem {
+		enumerated: false, checked: None,
+		inner: "something"
+	},
+	ListItem {
+		enumerated: false, checked: None,
+		inner: "another thing"
+	}
+])
 ```
 
 #### Nesting
@@ -149,15 +158,46 @@ Using tab indentation we can add nest lists under lists
 	- Two
 ```
 
-> The implementation is that each list item has a `depth` property
-
 ```
-List([ListItem { enumerated: false, checked: None, inner: [Paragraph("First item"), List([ListItem { enumerated: false, checked: None, inner: "Nested one" }, ListItem { enumerated: false, checked: None, inner: "Deep" }])] }, ListItem { enumerated: false, checked: None, inner: [Paragraph("Second item"), List([ListItem { enumerated: false, checked: None, inner: "One" }, ListItem { enumerated: false, checked: None, inner: "Two" }])] }])
+List([
+	ListItem {
+		enumerated: false, checked: None,
+		inner: [
+			Paragraph("First item"),
+			List([
+				ListItem {
+					enumerated: false, checked: None,
+					inner: [
+						Paragraph("Nested one"),
+						List([
+							ListItem {
+								enumerated: false, checked: None,
+								inner: "Deep"
+							}
+						])
+					]
+				}
+			])
+		]
+	},
+	ListItem {
+		enumerated: false, checked: None,
+		inner: [
+			Paragraph("Second item"),
+			List([
+				ListItem {
+					enumerated: false, checked: None,
+					inner: "One"
+				},
+				ListItem {
+					enumerated: false, checked: None,
+					inner: "Two"
+				}
+			])
+		]
+	}
+])
 ```
-
-%%
-Could test invalid syntax here
-%%
 
 #### Enumerating
 
@@ -170,7 +210,20 @@ We can prefix with increasing numerals for enumerated lists
 ```
 
 ```
-List([ListItem { enumerated: true, checked: None, inner: "Hi" }, ListItem { enumerated: true, checked: None, inner: "Something" }, ListItem { enumerated: true, checked: None, inner: "X" }])
+List([
+	ListItem {
+		enumerated: true, checked: None,
+		inner: "Hi"
+	},
+	ListItem {
+		enumerated: true, checked: None,
+		inner: "Something"
+	},
+	ListItem {
+		enumerated: true, checked: None,
+		inner: "X"
+	}
+])
 ```
 
 #### Checkboxes
@@ -181,7 +234,16 @@ List([ListItem { enumerated: true, checked: None, inner: "Hi" }, ListItem { enum
 ```
 
 ```
-List([ListItem { enumerated: false, checked: Some(true), inner: "Write specification" }, ListItem { enumerated: false, checked: Some(false), inner: "Complete tests" }])
+List([
+	ListItem {
+		enumerated: false, checked: Some(true),
+		inner: "Write specification"
+	},
+	ListItem {
+		enumerated: false, checked: Some(false),
+		inner: "Complete tests"
+	}
+])
 ```
 
 #### Prefixes
@@ -194,7 +256,16 @@ List([ListItem { enumerated: false, checked: Some(true), inner: "Write specifica
 ```
 
 ```
-List([ListItem { enumerated: false, checked: None, inner: "hi" }, ListItem { enumerated: false, checked: None, inner: "hello" }])
+List([
+	ListItem {
+		enumerated: false, checked: None,
+		inner: "hi"
+	},
+	ListItem {
+		enumerated: false, checked: None,
+		inner: "hello"
+	}
+])
 ```
 
 #### Containing stylings
@@ -205,18 +276,37 @@ List([ListItem { enumerated: false, checked: None, inner: "hi" }, ListItem { enu
 ```
 
 ```
-List([ListItem { enumerated: false, checked: None, inner: [Plain("Bold", bold)] }, ListItem { enumerated: false, checked: None, inner: [Plain("Italic", emphasised)] }])
+List([
+	ListItem {
+		enumerated: false, checked: None,
+		inner: [Plain("Bold", bold)]
+	},
+	ListItem {
+		enumerated: false, checked: None,
+		inner: [Plain("Italic", emphasised)]
+	}
+])
 ```
 
 #### Containing elements
 
 ```md
-- Something
-  > Something
+- List item
+  > Quote item
 ```
 
 ```
-List([ListItem { enumerated: false, checked: None, inner: [Paragraph("Something"), QuoteBlock { inner: [Paragraph("Something")] }] }])
+List([
+	ListItem {
+		enumerated: false, checked: None,
+		inner: [
+			Paragraph("List item"),
+			QuoteBlock {
+				inner: "Quote item"
+			}
+		]
+	}
+])
 ```
 
 ### Code blocks
@@ -289,7 +379,7 @@ $$
 ```
 
 ```
-BlockMathematics(BlockMathematics("y=\\sin x"))
+MathematicsBlock(MathematicsBlock("y=\\sin x"))
 ```
 
 > This is expected to go through a `LaTeX` or equivalent compiler
@@ -303,7 +393,9 @@ Prefixing with a item with `RIGHT-POINTING ANGLE BRACKET` marks the content as b
 ```
 
 ```
-QuoteBlock { inner: [Paragraph("Hello")] }
+QuoteBlock {
+	inner: "Hello"
+}
 ```
 
 #### Nesting
@@ -317,7 +409,15 @@ Content can be nested inside of quote blocks. It is important to note that this 
 ```
 
 ```
-QuoteBlock { inner: [Heading { level: 1, content: "Hello" }, Paragraph("something"), QuoteBlock { inner: [Paragraph("a quote in a quote")] }] }
+QuoteBlock {
+	inner: [
+		Heading { level: 1, content: "Hello" },
+		Paragraph("something"),
+		QuoteBlock {
+			inner: "a quote in a quote"
+		}
+	]
+}
 ```
 
 #### Alerts
@@ -344,11 +444,26 @@ These are prefixes that can be added to quote blocks which relate to some custom
 ```
 
 ```
-QuoteBlock { alert: "NOTE", inner: [Paragraph("Useful information that users should know, even when skimming content.")] }
-QuoteBlock { alert: "TIP", inner: [Paragraph("Helpful advice for doing things better or more easily.")] }
-QuoteBlock { alert: "IMPORTANT", inner: [Paragraph("Key information users need to know to achieve their goal.")] }
-QuoteBlock { alert: "WARNING", inner: [Paragraph("Urgent info that needs immediate user attention to avoid problems.")] }
-QuoteBlock { alert: "CAUTION", inner: [Paragraph("Advises about risks or negative outcomes of certain actions.")] }
+QuoteBlock {
+	alert: "NOTE",
+	inner: "Useful information that users should know, even when skimming content."
+}
+QuoteBlock {
+	alert: "TIP",
+	inner: "Helpful advice for doing things better or more easily."
+}
+QuoteBlock {
+	alert: "IMPORTANT",
+	inner: "Key information users need to know to achieve their goal."
+}
+QuoteBlock {
+	alert: "WARNING",
+	inner: "Urgent info that needs immediate user attention to avoid problems."
+}
+QuoteBlock {
+	alert: "CAUTION",
+	inner: "Advises about risks or negative outcomes of certain actions."
+}
 ```
 
 ### Tables

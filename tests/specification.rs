@@ -17,7 +17,12 @@ fn as_lines(content: &str) -> String {
         options,
         Default::default(),
         |item| {
-            writeln!(buf, "{item}", item = item.debug_with_options(true)).unwrap();
+            writeln!(
+                buf,
+                "{item}",
+                item = item.debug_with_options(Default::default())
+            )
+            .unwrap();
             Ok(())
         },
     )
@@ -96,7 +101,17 @@ fn get_tests() -> Vec<Test> {
     let mut current_test = Test::default();
     let mut section = String::new();
 
-    let result = parse::<()>(include_str!("../tests/specification.md"), |element| {
+    let content =
+        std::fs::read_to_string("./tests/specification.md").expect("could not find specification");
+
+    // let content = {
+    //     let mut content = content;
+    //     content.push_str("\n\n");
+    //     content.push_str(&std::fs::read_to_string("./tests/private_specification.md").unwrap());
+    //     content
+    // };
+
+    let result = parse::<()>(&content, |element| {
         if let MarkdownElement::Heading { level, content } = element {
             if level >= 3 {
                 if !current_test.case.is_empty() {

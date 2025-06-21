@@ -15,7 +15,7 @@ default = ["yaml"] # "html"
 # utilities = []
 # For frontmatter
 yaml = ["dep:simple-yaml-parser"]
-# html = ["dep:lightml"]
+html = []                         # "dep:lightml"]
 
 [dependencies]
 # lightml.version = "*", lightml.optional = true, lightml.branch = "fixes1", lightml.git = "https://github.com/kaleidawave/lightml", lightml.features = ["markdown_code_blocks_in_html"]

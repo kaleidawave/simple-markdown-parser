@@ -26,34 +26,19 @@ pub fn markdown_to_html_string(source: &str, emitter: Option<FeatureEmitterWASM>
 
 pub fn markdown_to_html(
     source: &str,
-    _out: &mut impl Write,
-    _emitter: &impl FeatureEmitter,
+    out: &mut impl Write,
+    emitter: &impl FeatureEmitter,
     options: ParseOptions,
-    container_residue: super::ContainerResidue<'_>,
 ) -> Result<(), MarkdownParseError<()>> {
-    // let mut last_was_list_item: Option<&'static str> = None;
-    crate::parse_with_options::<()>(source, options, container_residue, |_item| {
-        todo!();
-        // let is_list_item = if let MarkdownElement::ListItem {
-        //     enumerated,
-        //     checked: _,
-        //     ..
-        // } = item
-        // {
-        //     Some(if enumerated { "ol" } else { "ul" })
-        // } else {
-        //     None
-        // };
-        // if let (Some(tag), None) = (is_list_item, last_was_list_item) {
-        //     writeln!(out, "<{tag}>").unwrap();
-        // } else if let (None, Some(tag)) = (is_list_item, last_was_list_item) {
-        //     writeln!(out, "</{tag}>").unwrap();
-        // }
-        // element_to_html(out, emitter, options, quote_depth, item).unwrap();
-        // last_was_list_item = is_list_item;
-
-        Ok(())
-    })
+    crate::parse_with_options::<()>(
+        source,
+        options,
+        crate::ContainerResidue::default(),
+        |item| {
+            element_to_html(out, emitter, options, item).unwrap();
+            Ok(())
+        },
+    )
 }
 
 pub trait FeatureEmitter {
@@ -208,12 +193,11 @@ impl FeatureEmitter for FeatureEmitterWASM {
     }
 }
 
-#[allow(clippy::match_same_arms)]
+#[allow(clippy::too_many_lines)]
 pub fn element_to_html(
     out: &mut impl Write,
     emitter: &impl FeatureEmitter,
     options: ParseOptions,
-    _quote_depth: u8,
     item: MarkdownElement,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match item {
@@ -236,8 +220,10 @@ pub fn element_to_html(
             } else {
                 write!(out, ">")?;
             }
-            todo!();
-            // markdown_to_html(block.inner, out, emitter, options, quote_depth + 1).unwrap();
+            let crate::RawMarkdown(inner, container_residue) = block.inner;
+            let _ = crate::parse_with_options(inner, options, container_residue, |_item| {
+                element_to_html(out, emitter, options, item)
+            });
             writeln!(out, "</blockquote>")?;
         }
         MarkdownElement::Paragraph(content) => {
@@ -250,20 +236,22 @@ pub fn element_to_html(
                 writeln!(out, "</p>")?;
             }
         }
-        MarkdownElement::List(_list) => {
-            todo!()
+        MarkdownElement::List(list) => {
+            let tag_name = if list.is_ordered() { "ol" } else { "ul" };
+            writeln!(out, "<{tag_name}>")?;
+            list.parse_inner(|item| {
+                writeln!(out, "<li>").unwrap();
+                let crate::RawMarkdown(inner, container_residue) = item.content;
+                let _result =
+                    crate::parse_with_options(inner, options, container_residue, |item| {
+                        element_to_html(out, emitter, options, item)
+                    });
+                writeln!(out, "</li>").unwrap();
+                // TODO error
+                // result;
+            });
+            writeln!(out, "</{tag_name}>")?;
         }
-        // MarkdownElement::ListItem {
-        //     level: _level,
-        //     content,
-        //     enumerated: _,
-        //     checked: _,
-        // } => {
-        //     writeln!(out, "<li>")?;
-        //     inner_to_html(out, emitter, content)?;
-        //     writeln!(out, "</li>")?;
-        // }
-        // TODO test
         MarkdownElement::Table(table) => {
             writeln!(out, "<table>")?;
             let mut rows = table.rows();
@@ -298,7 +286,7 @@ pub fn element_to_html(
                 "<pre data-language=\"{language}\"><code>{inner}</code></pre>"
             )?;
         }
-        MarkdownElement::BlockMathematics(crate::BlockMathematics(script)) => {
+        MarkdownElement::MathematicsBlock(crate::MathematicsBlock(script)) => {
             writeln!(
                 out,
                 "<p class=\"mathematics block\">{inner}</p>",
@@ -325,6 +313,7 @@ pub fn element_to_html(
         | MarkdownElement::CommentBlock(_)
         | MarkdownElement::Empty => {}
     }
+
     // #[cfg(feature = "html")]
     // MarkdownElement::HTMLElement { source: _, element } => {
     //     fn emit_element(
