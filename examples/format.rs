@@ -57,7 +57,7 @@ fn format_markdown_content(content: &str) -> String {
     let line_end = if uses_crlf { "\r\n" } else { "\n" };
 
     let parse_options = Default::default();
-    let to_string_options = simple_markdown_parser::utilities::AsMarkdownOptions {
+    let to_string_options = simple_markdown_parser::extras::AsMarkdownOptions {
         uses_crlf,
         skip_comments: false,
     };

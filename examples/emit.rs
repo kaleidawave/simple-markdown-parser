@@ -17,7 +17,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &mut file,
         &mut simple_markdown_parser::emit::BlankFeatureEmitter,
         simple_markdown_parser::ParseOptions::default(),
-        Default::default(),
     );
 
     Ok(())
