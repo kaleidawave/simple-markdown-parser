@@ -51,9 +51,9 @@ pub enum MarkdownPart<'a> {
     ExternalLink {
         to: &'a str,
     },
-    // Alt text = on
     MediaLink {
         source: &'a str,
+        alt: &'a str,
     },
     LineBreak,
     HTMLElement(HTMLElement<'a>),
@@ -203,7 +203,7 @@ pub struct HTMLElement<'a>(pub &'a str);
 pub struct MathematicsBlock<'a>(pub &'a str);
 
 #[derive(Debug, Copy, Clone)]
-pub struct List<'a>(pub(crate) RawMarkdown<'a>);
+pub struct List<'a>(pub RawMarkdown<'a>);
 
 #[derive(Debug, Copy, Clone)]
 pub struct ListItem<'a> {

@@ -6,17 +6,24 @@ pub struct AsMarkdownOptions {
     pub skip_comments: bool,
 }
 
+use std::io::Write;
+
 impl MarkdownElement<'_> {
-    // TODO using write
-    #[must_use]
-    pub fn as_markdown(&self, options: AsMarkdownOptions) -> String {
+    #[allow(clippy::too_many_lines)]
+    pub fn as_markdown(
+        &self,
+        out: &mut impl Write,
+        indent: &str,
+        options: AsMarkdownOptions,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let new_line = if options.uses_crlf { "\r\n" } else { "\n" };
         match self {
             MarkdownElement::Heading { level, content } => {
-                let mut s = "#".repeat(*level as usize);
-                s.push(' ');
-                s.push_str(content.0);
-                s
+                let level = *level as usize;
+                let prefix = "########".get(..level).expect("deep tag");
+                // TODO content
+                write!(out, "{indent}{prefix} {content}", content = content.0)?;
+                Ok(())
             }
             MarkdownElement::CodeBlock(crate::CodeBlock {
                 language,
@@ -30,31 +37,96 @@ impl MarkdownElement<'_> {
                         .map_or(code.len(), |idx| idx + 1);
                     max = std::cmp::max(max, backticks);
                 }
-                let indent = &"```````````````".get(..max).expect("lol");
-                let mut s = format!("{indent}{language}{new_line}");
+                let fence = &"```````````````".get(..max).expect("lol");
+                write!(out, "{indent}{fence}{language}{new_line}")?;
                 for line in code.lines() {
                     // Hopefully trailing whitespace has no meaning in your language
-                    s.push_str(line.trim_end());
+                    write!(
+                        out,
+                        "{indent}{content}{new_line}",
+                        content = line.trim_end()
+                    )?;
                 }
-                s.push_str(indent);
-                s
+                write!(out, "{indent}{fence}")?;
+                Ok(())
             }
-            MarkdownElement::Paragraph(content) => content.0.to_owned(),
-            MarkdownElement::Quote(content) => content.inner.0.to_owned(),
+            MarkdownElement::Paragraph(content) => {
+                // TODO content processing
+                write!(out, "{indent}{content}", content = content.0)?;
+                Ok(())
+            }
+            MarkdownElement::Quote(content) => {
+                write!(out, "{indent}{content}", content = content.inner.0)?;
+                Ok(())
+            }
             MarkdownElement::Frontmatter(frontmatter) => {
-                format!("---{new_line}{source}---", source = frontmatter.0)
+                // TODO formatting using `simple_yaml_parser`
+                write!(out, "---{new_line}{source}---", source = frontmatter.0)?;
+                Ok(())
             }
             // #[cfg(feature = "html")]
             // MarkdownElement::HTMLElement { element: _, source } => source.to_string(),
-            MarkdownElement::Empty => String::new(),
             MarkdownElement::CommentBlock(comment) => {
-                if options.skip_comments {
-                    String::default()
-                } else {
-                    format!("%%{new_line}{comment}{new_line}%%")
+                if !options.skip_comments {
+                    write!(out, "%%{new_line}{comment}{new_line}%%")?;
                 }
+                Ok(())
             }
-            item => format!("TODO {item:?}"),
+            MarkdownElement::List(list) => {
+                let mut multiple_items = false;
+                list.parse_inner::<Box<dyn std::error::Error>>(|list_item| {
+                    let crate::ListItem {
+                        content,
+                        checked: _,
+                        enumerated: _,
+                    } = list_item;
+                    if multiple_items {
+                        write!(out, "{new_line}")?;
+                    }
+                    // TODO checked & enumerated
+                    let list_indent = "  ";
+                    write!(out, "{indent}- ")?;
+                    let new_indent = format!("{indent}{list_indent}");
+                    let mut multiple = false;
+                    let parse_options = crate::ParseOptions::default();
+                    crate::parse_with_options::<Box<dyn std::error::Error>>(
+                        content.0,
+                        parse_options,
+                        content.1,
+                        |item| {
+                            let indent = if multiple {
+                                write!(out, "{new_line}")?;
+                                &new_indent
+                            } else {
+                                indent
+                            };
+                            item.as_markdown(out, indent, options)?;
+                            multiple = true;
+                            Ok(())
+                        },
+                    )?;
+                    multiple_items = true;
+                    Ok(())
+                })
+            }
+            MarkdownElement::Table(table) => {
+                // TODO
+                write!(out, "{content}", content = table.0)?;
+                Ok(())
+            }
+            MarkdownElement::MathematicsBlock(content) => {
+                // TODO
+                write!(out, "$$\n{content}\n$$", content = content.0)?;
+                Ok(())
+            }
+            MarkdownElement::CommandBlock(_command) => {
+                todo!()
+                // TODO
+                // write!(out, "$$\n{command}\n$$", command=command.0)?;
+            }
+            MarkdownElement::HTMLElement(_element) => todo!(),
+            MarkdownElement::HorizontalRule => todo!(),
+            MarkdownElement::Empty => Ok(()),
         }
     }
 }
@@ -76,14 +148,10 @@ impl DebugOptions {
     }
 
     pub(crate) fn get_indent(self) -> &'static str {
-        // static CONS: &str = "......................";
-        // CONS.get(..self.indent).unwrap_or(CONS)
-
+        // static SPACES: &str = "                        ";
+        // SPACES.get(..(self.indent * 2)).unwrap_or(SPACES)
         static TABS: &str = "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t";
         TABS.get(..self.indent).unwrap_or(TABS)
-
-        // static SPACES: &str = "                    ";
-        // SPACES.get(..(self.indent * 2)).unwrap_or(SPACES)
     }
 }
 
@@ -181,7 +249,7 @@ impl MarkdownElement<'_> {
                     let mut list_items = "[".to_owned();
                     // FUTURE pass options down?
                     let parse_options = crate::ParseOptions::default();
-                    list.parse_inner(|crate::ListItem { content, checked, enumerated  }| {
+                    list.parse_inner::<()>(|crate::ListItem { content, checked, enumerated }| {
                         let options = options.next();
                         let mut inner = "[".to_owned();
                         if options.pretty {
@@ -236,7 +304,8 @@ impl MarkdownElement<'_> {
                             list_items.push_str(indent);
                         }
                         list_items.push_str(&item);
-                    });
+                        Ok(())
+                    }).unwrap();
                     if options.pretty {
                         list_items.push_str(new_line);
                         list_items.push_str(options.get_indent());
@@ -378,10 +447,12 @@ impl MarkdownElement<'_> {
                     arguments = command_block.parse_arguments()
                 )
             }
-            #[cfg(feature = "html")]
-            MarkdownElement::HTMLElement { element, .. } => {
-                todo!()
-                // format!("HTMLElement({element:?})")
+            MarkdownElement::HTMLElement(element) => {
+                #[cfg(feature = "html")]
+                todo!("debug element");
+
+                #[cfg(not(feature = "html"))]
+                format!("HTMLElement({element:?})")
             }
             #[cfg(feature = "yaml")]
             MarkdownElement::Frontmatter(frontmatter) => {
@@ -398,8 +469,10 @@ impl MarkdownElement<'_> {
                 s.push_str(" }");
                 s
             }
-            // rest
-            item => format!("{indent}{item:?}"),
+            item @ (MarkdownElement::MathematicsBlock(_)
+            | MarkdownElement::CommentBlock(_)
+            | MarkdownElement::HorizontalRule
+            | MarkdownElement::Empty) => format!("{item:?}"),
         }
     }
 }

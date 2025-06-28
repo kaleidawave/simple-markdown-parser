@@ -239,17 +239,15 @@ pub fn element_to_html(
         MarkdownElement::List(list) => {
             let tag_name = if list.is_ordered() { "ol" } else { "ul" };
             writeln!(out, "<{tag_name}>")?;
-            list.parse_inner(|item| {
-                writeln!(out, "<li>").unwrap();
+            list.parse_inner::<Box<dyn std::error::Error>>(|item| {
+                writeln!(out, "<li>")?;
                 let crate::RawMarkdown(inner, container_residue) = item.content;
-                let _result =
-                    crate::parse_with_options(inner, options, container_residue, |item| {
-                        element_to_html(out, emitter, options, item)
-                    });
-                writeln!(out, "</li>").unwrap();
-                // TODO error
-                // result;
-            });
+                crate::parse_with_options(inner, options, container_residue, |item| {
+                    element_to_html(out, emitter, options, item)
+                })?;
+                writeln!(out, "</li>")?;
+                Ok(())
+            })?;
             writeln!(out, "</{tag_name}>")?;
         }
         MarkdownElement::Table(table) => {
@@ -432,10 +430,10 @@ pub fn inner_to_html(
                 "<a href=\"{to}\">{on}</a>",
                 on = escape_string_content(on)
             )?,
-            MarkdownPart::MediaLink { source } => write!(
+            MarkdownPart::MediaLink { source, alt } => write!(
                 out,
-                "<img src=\"{source}\" alt=\"{on}\">",
-                on = escape_string_content(on)
+                "<img src=\"{source}\" alt=\"{alt}\">",
+                alt = escape_string_content(alt)
             )?,
             MarkdownPart::LineBreak => write!(out, "<br>",)?,
             // FUTURE improve

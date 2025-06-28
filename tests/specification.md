@@ -782,7 +782,7 @@ Paragraph([InternalLink { to: "#x" } ("#x")])
 ```
 
 ```
-Paragraph([MediaLink { source: "https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExeHhzc2tuNmFlcHNnMWRyNG1jNzlkMXA3andraGRvZDh2MzJ4cXJvcSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/SwpQtSRf8Ekby5IsTw/giphy.gif" } ("...")])
+Paragraph([MediaLink { source: "https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExeHhzc2tuNmFlcHNnMWRyNG1jNzlkMXA3andraGRvZDh2MzJ4cXJvcSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/SwpQtSRf8Ekby5IsTw/giphy.gif", alt: "..." } ])
 ```
 
 #### Chevron links
@@ -874,4 +874,16 @@ The day is {date}.
 
 ```
 Paragraph([Plain("The day is "), Interpolation("date"), Plain(".")])
+```
+
+### External link content
+
+```md
+![LOC badge](https://project-information-kaleidawave.val.run/project/simple-markdown-parser/badge)
+[![crates.io badge](https://img.shields.io/crates/v/simple-markdown-parser?style=flat-square)](https://crates.io/crates/simple-markdown-parser)
+[![docs.rs badge](https://img.shields.io/docsrs/simple-markdown-parser?style=flat-square)](https://docs.rs/simple-markdown-parser/latest)
+```
+
+```
+Paragraph([MediaLink { source: "https://project-information-kaleidawave.val.run/project/simple-markdown-parser/badge", alt: "LOC badge" } , ExternalLink { to: "https://crates.io/crates/simple-markdown-parser" } ("![crates.io badge](https://img.shields.io/crates/v/simple-markdown-parser?style=flat-square)"), ExternalLink { to: "https://docs.rs/simple-markdown-parser/latest" } ("![docs.rs badge](https://img.shields.io/docsrs/simple-markdown-parser?style=flat-square)")])
 ```

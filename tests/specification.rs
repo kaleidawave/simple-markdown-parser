@@ -104,12 +104,17 @@ fn get_tests() -> Vec<Test> {
     let content =
         std::fs::read_to_string("./tests/specification.md").expect("could not find specification");
 
-    // let content = {
-    //     let mut content = content;
-    //     content.push_str("\n\n");
-    //     content.push_str(&std::fs::read_to_string("./tests/private_specification.md").unwrap());
-    //     content
-    // };
+    let content =
+        if let Ok(mut additional) = std::fs::File::open("./tests/private_more.specification.md") {
+            use std::io::Read;
+
+            let mut content = content;
+            content.push_str("\n\n");
+            additional.read_to_string(&mut content).unwrap();
+            content
+        } else {
+            content
+        };
 
     let result = parse::<()>(&content, |element| {
         if let MarkdownElement::Heading { level, content } = element {

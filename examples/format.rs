@@ -41,64 +41,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn format_markdown_content(content: &str) -> String {
-    #[derive(PartialEq, Eq, Clone, Copy)]
-    enum ItemKind {
-        Start,
-        Media,
-        ListItem,
-        Other,
-    }
+    // #[derive(PartialEq, Eq, Clone, Copy)]
+    // enum ItemKind {
+    //     Start,
+    //     Media,
+    //     Other,
+    // }
 
     let first_new_line = content.find('\n').unwrap_or_default();
-    let uses_crlf = content[..first_new_line]
-        .chars()
-        .next_back()
-        .is_some_and(|l| l == '\r');
+    let uses_crlf = content[..first_new_line].ends_with('\r');
     let line_end = if uses_crlf { "\r\n" } else { "\n" };
 
     let parse_options = Default::default();
-    let to_string_options = simple_markdown_parser::extras::AsMarkdownOptions {
+    let to_md_options = simple_markdown_parser::extras::AsMarkdownOptions {
         uses_crlf,
         skip_comments: false,
     };
-    let mut buf = String::new();
-    let mut last_was_block = ItemKind::Start;
+    let mut buf: Vec<u8> = Vec::new();
+    // let mut last_was_block = ItemKind::Start;
 
     simple_markdown_parser::parse_with_options::<()>(
         content,
         parse_options,
         Default::default(),
         |item| {
-            use std::fmt::Write;
+            use std::io::Write;
 
-            let item_is_block = match item {
-                // simple_markdown_parser::MarkdownElement::ListItem { .. } => ItemKind::ListItem,
-                simple_markdown_parser::MarkdownElement::Paragraph(item) => {
-                    // WIP
-                    if item.0.starts_with("![") || item.0.starts_with("[![") {
-                        ItemKind::Media
-                    } else {
-                        ItemKind::Other
-                    }
-                }
-                _ => ItemKind::Other,
-            };
-            let should_add_line = match (last_was_block, item_is_block) {
-                (ItemKind::Start, _) => false,
-                (ItemKind::ListItem, ItemKind::ListItem) => false,
-                (ItemKind::Media, ItemKind::Media) => false,
-                _ => true,
-            };
-            if should_add_line {
+            if !buf.is_empty() {
                 write!(&mut buf, "{line_end}").unwrap();
             }
-            buf.push_str(&item.as_markdown(to_string_options));
-            last_was_block = item_is_block;
+            let _ = &item.as_markdown(&mut buf, "", to_md_options);
             write!(&mut buf, "{line_end}").unwrap();
             Ok(())
         },
     )
     .unwrap();
 
-    buf
+    unsafe { String::from_utf8_unchecked(buf) }
 }

@@ -137,7 +137,12 @@ where
                         });
                     (!r#continue).then_some((true, section))
                 } else if line.trim_end() == delimeter {
-                    Some((false, section.rsplit_once('\n').unwrap().0))
+                    if let Some((code, _)) = section.rsplit_once('\n') {
+                        Some((false, code))
+                    } else {
+                        // panic!("Content was {section:?}");
+                        Some((false, ""))
+                    }
                 } else {
                     None
                 };
@@ -398,7 +403,10 @@ where
                                 .reader
                                 .peek_line()
                                 .map(|line| self.container_residue.strip_prefix(line))
-                                .is_some_and(|rest| rest.starts_with(char::is_alphanumeric));
+                                .is_some_and(|rest| {
+                                    rest.starts_with(char::is_alphanumeric)
+                                        || rest.starts_with(['[', '!'])
+                                });
 
                         if continuation {
                             return Ok(());
@@ -610,7 +618,7 @@ impl<'a> Iterator for PartsIterator<'a> {
                     let Some(bracket_offset) = till_bracket else {
                         todo!("error: could not find ']' in {after:?}");
                     };
-                    let alt_text = &range[2..bracket_offset];
+                    let alt = &range[2..bracket_offset];
                     let next = &range[(bracket_offset + 1)..];
                     assert!(next.starts_with('('));
                     let Some(parenthesis_offset) = next.find(')') else {
@@ -619,13 +627,26 @@ impl<'a> Iterator for PartsIterator<'a> {
                     let source = &range[(bracket_offset + 1)..][1..parenthesis_offset];
                     self.last += 1 + bracket_offset + parenthesis_offset + 1;
                     Some(MarkdownTextElement {
-                        on: alt_text,
+                        on: "",
                         decoration: self.decoration,
-                        kind: MarkdownPart::MediaLink { source },
+                        kind: MarkdownPart::MediaLink { source, alt },
                     })
                 }
                 '[' => {
-                    let till_bracket = after.find(']');
+                    let mut till_bracket = None;
+                    let mut depth = 1;
+                    // TODO more escapes and such... :(
+                    for (idx, matched) in after.match_indices(&['[', ']']) {
+                        if let "]" = matched {
+                            depth -= 1;
+                            if depth == 0 {
+                                till_bracket = Some(idx);
+                                break;
+                            }
+                        } else {
+                            depth += 1;
+                        }
+                    }
                     let Some(bracket_offset) = till_bracket else {
                         todo!("error");
                     };
@@ -754,7 +775,10 @@ impl<'a> Iterator for PartsIterator<'a> {
     }
 }
 impl<'a> List<'a> {
-    pub fn parse_inner(&self, mut cb: impl FnMut(crate::ListItem<'a>)) {
+    pub fn parse_inner<T>(
+        &self,
+        mut cb: impl FnMut(crate::ListItem<'a>) -> Result<(), T>,
+    ) -> Result<(), T> {
         let RawMarkdown(item, container_residue) = self.0;
         let mut lines = utilities::EdibleLines::new(item);
         while let Some(section) = lines.next() {
@@ -795,9 +819,10 @@ impl<'a> List<'a> {
                     checked,
                 };
                 lines.moving_on();
-                cb(list_item);
+                cb(list_item)?;
             }
         }
+        Ok(())
     }
 }
 
@@ -809,6 +834,7 @@ impl<'a> ContainerResidue<'a> {
     pub fn strip_prefix<'b>(&self, on: &'b str) -> &'b str {
         let Self(residue) = *self;
         // TODO `trim_start`?
+        // TODO loop
         let origin = residue.trim_start();
         if origin.starts_with('>') {
             let mut expected = residue;
@@ -838,10 +864,45 @@ impl<'a> ContainerResidue<'a> {
             utilities::strip_upto_three_spaces(on)
         }
     }
+
+    // #[must_use]
+    // pub fn strip_prefix<'b>(&self, mut on: &'b str) -> &'b str {
+    //     let Self(residue) = *self;
+    //     let mut origin = residue.trim_start();
+    //     for (_idx, _matched_indices) in origin.match_indices(&['>', '-', '*', '+']) {
+    //         if origin.starts_with('>') {
+    //             while let (Some(next_expected), Some(next_on)) = (
+    //                 origin.trim_start().strip_prefix('>'),
+    //                 utilities::strip_upto_three_spaces(on).strip_prefix('>'),
+    //             ) {
+    //                 origin = next_expected;
+    //                 on = next_on;
+    //             }
+    //         } else if origin.strip_prefix(EXTENDED_LIST_PREFIXES).is_some() ||
+    //             utilities::strip_number_prefix(origin).is_some()
+    //         {
+    //             // TODO need count spaces rather than strip prefix
+    //             let on = on
+    //                 .strip_prefix(&origin[..(origin.len() - origin.len())])
+    //                 .unwrap_or(on);
+    //             let on = on
+    //                 .strip_prefix('\t')
+    //                 .or_else(|| on.strip_prefix("  "))
+    //                 .unwrap_or(on);
+    //             return utilities::strip_upto_three_spaces(on);
+    //         }
+    //     }
+    //     if !residue.is_empty() {
+    //         eprintln!("prefix was {residue}");
+    //     }
+    //     utilities::strip_upto_three_spaces(on)
+    // }
+
     #[must_use]
     pub fn count_skippable(&self, on: &str) -> usize {
         on.len() - self.strip_prefix(on).len()
     }
+
     #[must_use]
     pub fn new_in_quote(&self, section: &'a str) -> Self {
         let after = self
