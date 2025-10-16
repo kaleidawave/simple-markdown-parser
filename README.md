@@ -11,20 +11,10 @@ Uses
 
 TODO
 
-- Block actions
-- YAML parsing for frontmatter
 - HTML parsing
-- Ordered lists
-- List depth for emit
-- "*" and "+" for lists (under options)
-- Escaped code marks `code`
-- Titles in links
-- Highlight
-- Code block escapes: <https://stackoverflow.com/a/71150969/10048799>
 
 Additionally
 
 - CLI via example
 - Python?
-- Iterators and state machines. Does the text decoration cover enough?
 - Performance benchmark

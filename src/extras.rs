@@ -20,17 +20,22 @@ impl MarkdownElement<'_> {
         match self {
             MarkdownElement::Heading { level, content } => {
                 let level = *level as usize;
-                let prefix = "########".get(..level).expect("deep tag");
+                let prefix = "######"
+                    .get(..level)
+                    .expect("can only print tags upto 6 levels");
                 // TODO content
                 write!(out, "{indent}{prefix} {content}", content = content.0)?;
                 Ok(())
             }
             MarkdownElement::CodeBlock(crate::CodeBlock {
                 language,
-                code,
+                // TODO
+                raw_code: code,
                 indented_block: _indented_block,
+                container_residue: _,
             }) => {
                 let mut max = 3;
+                // Figure out depth
                 for (idx, _) in code.match_indices("```") {
                     let backticks = code[idx..]
                         .find(|chr| chr != '`')
@@ -379,13 +384,15 @@ impl MarkdownElement<'_> {
             }
             MarkdownElement::CodeBlock(crate::CodeBlock {
                 language,
-                code,
+                raw_code,
                 indented_block,
+                container_residue: _,
             }) => {
+                // TODO more
                 let code = if options.indent >= options.skip_content_after {
                     "..."
                 } else {
-                    code
+                    raw_code
                 };
                 if language.is_empty() {
                     format!(
@@ -507,10 +514,10 @@ impl crate::RawText<'_> {
     #[must_use]
     pub fn no_decoration(&self) -> String {
         let mut s = String::new();
-        for part in crate::PartsIterator::new(self.0, self.1) {
-            if let crate::MarkdownPart::Plain = part.kind {
-                s.push_str(part.on);
-            }
+        for part in crate::PartsIterator::new_with_container_residue(self.0, self.1) {
+            // if let crate::MarkdownPart::Plain = part.kind {
+            s.push_str(part.on);
+            // }
         }
         s
     }
@@ -525,5 +532,83 @@ impl crate::List<'_> {
             .strip_prefix(self.0 .0)
             .starts_with(super::parser::EXTENDED_LIST_PREFIXES);
         !is_unordered
+    }
+}
+
+impl crate::Frontmatter<'_> {
+    #[cfg(feature = "yaml")]
+    pub fn parse_yaml(
+        &self,
+        cb: impl for<'b> FnMut(
+            &'b [simple_yaml_parser::YAMLKey<'_>],
+            simple_yaml_parser::RootYAMLValue<'_>,
+        ),
+    ) -> Result<(), simple_yaml_parser::YAMLParseError> {
+        simple_yaml_parser::parse(self.0, cb)
+    }
+}
+
+impl<'a> crate::CodeBlock<'a> {
+    /// Prefer [`CodeBlock::content_lines`]
+    pub fn content(&self) -> std::borrow::Cow<'a, str> {
+        if self.container_residue.is_empty() {
+            std::borrow::Cow::Borrowed(self.raw_code)
+        } else {
+            let mut buf = String::new();
+            for line in self.content_lines() {
+                buf.push_str(line);
+                // TODO custom?
+                buf.push('\n');
+            }
+            std::borrow::Cow::Owned(buf)
+        }
+    }
+
+    pub fn content_lines(&self) -> impl Iterator<Item = &'a str> + '_ {
+        self.raw_code
+            .lines()
+            .map(|line| self.container_residue.strip_prefix(line))
+    }
+}
+
+impl<'a> crate::CommandBlock<'a> {
+    #[must_use]
+    #[allow(clippy::collapsible_else_if)]
+    pub fn parse_arguments(&self) -> Vec<(&'a str, &'a str)> {
+        let mut arguments = Vec::new();
+        let mut key: Option<&str> = None;
+        let mut upto = 0;
+        let mut in_string = false;
+
+        for (idx, chr) in self.arguments.char_indices() {
+            if let Some(current_key) = key {
+                let value = self.arguments[upto..idx].trim();
+                if let (' ', false, false) = (chr, in_string, value.is_empty()) {
+                    arguments.push((current_key, value));
+                    upto = idx;
+                    key = None;
+                } else if let '"' = chr {
+                    in_string = !in_string;
+                }
+            } else if let '=' = chr {
+                let key_acc = &self.arguments[upto..idx];
+                key = Some(key_acc.trim());
+                upto = idx + 1;
+            }
+        }
+
+        if let Some(current_key) = key {
+            if in_string {
+                eprintln!("missing '\"'");
+            }
+            let value = self.arguments[upto..].trim();
+            arguments.push((current_key, value));
+        }
+
+        if !self.arguments.is_empty() && arguments.is_empty() {
+            arguments.push(("", self.arguments));
+        }
+
+        arguments
     }
 }

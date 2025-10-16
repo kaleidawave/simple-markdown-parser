@@ -273,12 +273,15 @@ pub fn element_to_html(
             writeln!(out, "</tbody>")?;
             writeln!(out, "</table>")?;
         }
-        MarkdownElement::CodeBlock(crate::CodeBlock {
-            language,
-            code,
-            indented_block: _,
-        }) => {
-            let inner = emitter.code_block(language, code);
+        MarkdownElement::CodeBlock(
+            block @ crate::CodeBlock {
+                language,
+                indented_block: _,
+                ..
+            },
+        ) => {
+            let code = block.content();
+            let inner = emitter.code_block(language, &code);
             writeln!(
                 out,
                 "<pre data-language=\"{language}\"><code>{inner}</code></pre>"

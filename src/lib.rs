@@ -123,6 +123,12 @@ pub struct MarkdownTextElement<'a> {
     pub kind: MarkdownPart<'a>,
 }
 
+impl<'a> MarkdownTextElement<'a> {
+    pub fn is_plain(&self) -> bool {
+        self.decoration.is_empty() && matches!(self.kind, MarkdownPart::Plain)
+    }
+}
+
 /// (unsplit) Text inside markdown item
 #[derive(Debug, Copy, Clone)]
 pub struct RawText<'a>(pub &'a str, pub ContainerResidue<'a>);
@@ -130,7 +136,7 @@ pub struct RawText<'a>(pub &'a str, pub ContainerResidue<'a>);
 impl<'a> RawText<'a> {
     #[must_use]
     pub fn parts(&self) -> PartsIterator<'a> {
-        PartsIterator::new(self.0, self.1)
+        PartsIterator::new_with_container_residue(self.0, self.1)
     }
 }
 
@@ -193,7 +199,9 @@ pub struct QuoteBlock<'a> {
 pub struct CodeBlock<'a> {
     pub indented_block: bool,
     pub language: &'a str,
-    pub code: &'a str,
+    // This can have artifacts of [`ContainerResidue`]
+    pub raw_code: &'a str,
+    pub container_residue: ContainerResidue<'a>,
 }
 
 #[derive(Debug, Copy, Clone)]

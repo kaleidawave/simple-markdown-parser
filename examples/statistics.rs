@@ -64,8 +64,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .entry(cb.language.to_owned())
                         .or_default() += 1;
                 }
+                // TODO inner
                 MarkdownElement::Quote(_) => statistics.quote += 1,
-                // MarkdownElement::ListItem { .. } => statistics.list_items += 1,
                 MarkdownElement::CommentBlock(_) => {}
                 item => eprintln!("Not recording {item:?}"),
             }

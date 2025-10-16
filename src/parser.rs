@@ -127,7 +127,7 @@ where
                 language,
                 delimeter,
             } => {
-                let code = if let "    " = delimeter {
+                let raw_code = if let "    " = delimeter {
                     let r#continue = self
                         .reader
                         .peek_line()
@@ -137,8 +137,8 @@ where
                         });
                     (!r#continue).then_some((true, section))
                 } else if line.trim_end() == delimeter {
-                    if let Some((code, _)) = section.rsplit_once('\n') {
-                        Some((false, code))
+                    if let Some((raw_code, _)) = section.rsplit_once('\n') {
+                        Some((false, raw_code))
                     } else {
                         // panic!("Content was {section:?}");
                         Some((false, ""))
@@ -146,11 +146,14 @@ where
                 } else {
                     None
                 };
-                if let Some((indented_block, code)) = code {
+
+                // TODO include `container_residue`
+                if let Some((indented_block, raw_code)) = raw_code {
                     let code_block = CodeBlock {
                         language,
                         indented_block,
-                        code: code.trim_end(),
+                        raw_code: raw_code.trim_end(),
+                        container_residue: self.container_residue,
                     };
                     invoke!(MarkdownElement::CodeBlock(code_block));
                 }
@@ -435,7 +438,15 @@ pub struct PartsIterator<'a> {
 
 impl<'a> PartsIterator<'a> {
     #[must_use]
-    pub fn new(on: &'a str, container_residue: ContainerResidue<'a>) -> Self {
+    pub fn new(on: &'a str) -> Self {
+        Self::new_with_container_residue(on, ContainerResidue::default())
+    }
+
+    #[must_use]
+    pub fn new_with_container_residue(
+        on: &'a str,
+        container_residue: ContainerResidue<'a>,
+    ) -> Self {
         Self {
             on: container_residue.strip_prefix(on).trim(),
             last: 0,
@@ -634,19 +645,17 @@ impl<'a> Iterator for PartsIterator<'a> {
                 }
                 '[' => {
                     let mut till_bracket = None;
-                    let mut depth = 1;
-                    // TODO more escapes and such... :(
-                    for (idx, matched) in after.match_indices(&['[', ']']) {
-                        if let "]" = matched {
-                            depth -= 1;
-                            if depth == 0 {
-                                till_bracket = Some(idx);
-                                break;
-                            }
-                        } else {
-                            depth += 1;
+                    // TODO test
+                    for value in
+                        PartsIterator::new_with_container_residue(after, self.container_residue)
+                    {
+                        if let (true, Some(idx)) = (value.is_plain(), value.on.find(']')) {
+                            till_bracket =
+                                Some((value.on.as_ptr() as usize - after.as_ptr() as usize) + idx);
+                            break;
                         }
                     }
+
                     let Some(bracket_offset) = till_bracket else {
                         todo!("error");
                     };
@@ -830,6 +839,10 @@ impl<'a> List<'a> {
 pub struct ContainerResidue<'a>(pub &'a str);
 
 impl<'a> ContainerResidue<'a> {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     #[must_use]
     pub fn strip_prefix<'b>(&self, on: &'b str) -> &'b str {
         let Self(residue) = *self;
@@ -932,60 +945,5 @@ impl<'a> TableRow<'a> {
         inner
             .split('|')
             .map(|part| crate::RawText(part, ContainerResidue::default()))
-    }
-}
-
-impl<'a> crate::CommandBlock<'a> {
-    #[must_use]
-    #[allow(clippy::collapsible_else_if)]
-    pub fn parse_arguments(&self) -> Vec<(&'a str, &'a str)> {
-        let mut arguments = Vec::new();
-        let mut key: Option<&str> = None;
-        let mut upto = 0;
-        let mut in_string = false;
-
-        for (idx, chr) in self.arguments.char_indices() {
-            if let Some(current_key) = key {
-                let value = self.arguments[upto..idx].trim();
-                if let (' ', false, false) = (chr, in_string, value.is_empty()) {
-                    arguments.push((current_key, value));
-                    upto = idx;
-                    key = None;
-                } else if let '"' = chr {
-                    in_string = !in_string;
-                }
-            } else if let '=' = chr {
-                let key_acc = &self.arguments[upto..idx];
-                key = Some(key_acc.trim());
-                upto = idx + 1;
-            }
-        }
-
-        if let Some(current_key) = key {
-            if in_string {
-                eprintln!("missing '\"'");
-            }
-            let value = self.arguments[upto..].trim();
-            arguments.push((current_key, value));
-        }
-
-        if !self.arguments.is_empty() && arguments.is_empty() {
-            arguments.push(("", self.arguments));
-        }
-
-        arguments
-    }
-}
-
-impl crate::Frontmatter<'_> {
-    #[cfg(feature = "yaml")]
-    pub fn parse_yaml(
-        &self,
-        cb: impl for<'b> FnMut(
-            &'b [simple_yaml_parser::YAMLKey<'_>],
-            simple_yaml_parser::RootYAMLValue<'_>,
-        ),
-    ) -> Result<(), simple_yaml_parser::YAMLParseError> {
-        simple_yaml_parser::parse(self.0, cb)
     }
 }
