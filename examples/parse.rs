@@ -1,42 +1,29 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut args: std::collections::VecDeque<_> = std::env::args().skip(1).collect();
-    let path = args.pop_front().ok_or("expected argument")?;
+    let mut args: Vec<_> = std::env::args().skip(1).rev().collect();
+    let path = args.pop().unwrap_or("./private/corpus/aaa.md".into());
     let content = std::fs::read_to_string(path)?;
 
-    fn handler(item: simple_markdown_parser::MarkdownElement) {
-        if let simple_markdown_parser::MarkdownElement::CommandBlock(block) = item {
-            eprintln!(
-                "MarkdownElement::CommandBlock {{ name: {name:?}, arguments: {arguments:?} }} [",
-                name = block.name,
-                arguments = block.arguments()
-            );
-            let _ = simple_markdown_parser::parse(&block.inner.0, handler);
-            eprintln!("] End of {name:?}", name = block.name);
-            return;
-        } else {
-            if let Some(parts) = item.parts_like() {
-                eprint!("{} -> ", item.debug_without_text());
-                eprintln!(
-                    "parts={inner:?}",
-                    inner = parts
-                        .parts()
-                        .flat_map(|part| match part {
-                            simple_markdown_parser::MarkdownTextElement::Link { on, .. } => {
-                                on.parts().collect::<Vec<_>>()
-                            }
-                            part => vec![part],
-                        })
-                        .collect::<Vec<_>>()
-                );
-            } else {
-                eprintln!("{:?}", item);
-            }
-        }
+    fn handler(item: simple_markdown_parser::MarkdownElement) -> Result<(), ()> {
+        println!("{}", item.debug_with_options(Default::default()));
+        Ok(())
     }
 
-    let _ = simple_markdown_parser::parse(&content, handler);
+    let mut options = simple_markdown_parser::ParseOptions::default();
+    options.heading_underscores = true;
+    let result = simple_markdown_parser::parse_with_options(
+        content.as_str(),
+        options,
+        Default::default(),
+        handler,
+    );
 
-    eprintln!("finished");
-
+    match result {
+        Ok(()) => {
+            eprintln!("finished :)");
+        }
+        Err(err) => {
+            eprintln!("error {err:?}");
+        }
+    }
     Ok(())
 }

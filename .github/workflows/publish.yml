@@ -12,7 +12,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       id-token: write # The OIDC ID token is used for authentication with JSR.
     steps:
       - uses: actions/checkout@v4
@@ -38,6 +38,8 @@ jobs:
         run: | 
           wasm-pack build --target web --out-name build
 
+          cp README.md pkg/README.md
+
           # Add type definition references
           build_ts_reference='/// <reference types="./build.d.ts"/>'
           mv pkg/build.js temp.build.js
@@ -49,13 +51,13 @@ jobs:
           echo 'import{initSync}from"./build.js";initSync({module:await fetch(import.meta.resolve("./build_bg.wasm")).then(r=>r.arrayBuffer())});export*from"./build.js";' >> pkg/main.js
 
           modifications='.module = "main.js" | .main = "main.js" | .exports["./uninitialised"] = "./build.js" | .exports["."] = "./main.js"'
-          selections='{ name: ("@bengineering/" + .name), version: .version, license: .license, exclude: (.files | .[length] |= "main.js" | map("!./" + .)), exports: .exports }'
+          selections='{ name: ("@bengineering/" + .name), version: .version, license: .license, exclude: (.files | .[length] |= "main.js" | .[length] |= "README.md" | map("!./" + .)), exports: .exports }'
 
           mv pkg/package.json temp.package.json
           jq "$modifications" temp.package.json > pkg/package.json
           rm temp.package.json
           jq "$selections" pkg/package.json > pkg/jsr.json
-  
+
       - name: Publish on JSR
         run: deno publish --allow-dirty
         working-directory: pkg
