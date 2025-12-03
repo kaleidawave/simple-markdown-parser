@@ -1,4 +1,4 @@
-### simple-markdown-parser
+# simple-markdown-parser
 
 ![LOC badge](https://project-information-kaleidawave.val.run/project/simple-markdown-parser/badge)
 [![crates.io badge](https://img.shields.io/crates/v/simple-markdown-parser?style=flat-square)](https://crates.io/crates/simple-markdown-parser)
@@ -6,15 +6,10 @@
 
 Uses
 
-- no dependencies
-- no allocations
+- No dependencies
+- No allocations
 
-TODO
+## TODO
 
-- HTML parsing
-
-Additionally
-
-- CLI via example
-- Python?
 - Performance benchmark
+- Commands are broken (or different syntax is used somewhere)

@@ -5,7 +5,41 @@ pub mod extras;
 pub mod parser;
 pub mod utilities;
 
-pub use parser::{ContainerResidue, MarkdownParser, ParseOptions, PartsIterator, TableRow};
+pub use parser::{ContainerResidue, MarkdownParser, ParseOptions, PartsIterator};
+
+// Re-export YAML parser for frontmatter matching
+#[cfg(feature = "yaml")]
+pub use simple_yaml_parser;
+
+#[unsafe(no_mangle)]
+unsafe extern "Rust" fn parse_markdown(on: &str) -> Result<String, String> {
+    use std::fmt::Write;
+
+    let mut buf = String::new();
+    // TODO specify by flags
+    let options = ParseOptions {
+        allow_asterisk_and_plus_as_list_prefixes: true,
+        heading_underscores: true,
+        indented_code_blocks: true,
+        tilda_code_blocks: true,
+        record_empty_lines: false,
+        end_command_syntax: true,
+    };
+    let () = parse_with_options::<()>(on, options, Default::default(), |item| {
+        if !buf.is_empty() {
+            writeln!(buf).unwrap();
+        }
+        write!(
+            buf,
+            "{item}",
+            item = item.debug_with_options(Default::default())
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    Ok(buf)
+}
 
 /// Markdown block element
 #[derive(Debug, Copy, Clone)]
@@ -111,7 +145,7 @@ impl TextDecoration {
     }
 
     #[must_use]
-    pub fn is_empty(self) -> bool {
+    pub fn is_none(self) -> bool {
         self == Self::NONE
     }
 }
@@ -125,7 +159,7 @@ pub struct MarkdownTextElement<'a> {
 
 impl<'a> MarkdownTextElement<'a> {
     pub fn is_plain(&self) -> bool {
-        self.decoration.is_empty() && matches!(self.kind, MarkdownPart::Plain)
+        self.decoration.is_none() && matches!(self.kind, MarkdownPart::Plain)
     }
 }
 
@@ -220,4 +254,24 @@ pub struct ListItem<'a> {
     pub enumerated: bool,
     /// from `- [x]` etc
     pub checked: Option<bool>,
+}
+
+impl<'a> Table<'a> {
+    pub fn rows(&self) -> impl Iterator<Item = TableRow<'a>> {
+        let mut lines = self.0.lines();
+        let header = lines.next().expect("no heading (empty table)");
+        std::iter::once(TableRow(header)).chain(lines.skip(1).map(TableRow))
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct TableRow<'a>(pub(crate) &'a str);
+
+impl<'a> TableRow<'a> {
+    pub fn cells(&self) -> impl Iterator<Item = crate::RawText<'a>> {
+        let inner = &self.0[1..(self.0.len() - 1)];
+        inner
+            .split('|')
+            .map(|part| crate::RawText(part, ContainerResidue::default()))
+    }
 }

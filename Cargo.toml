@@ -32,9 +32,9 @@ tsify = { version = "0.4", features = ["js"] }
 js-sys = "0.3"
 console_error_panic_hook = "=0.1.7"
 
-[[test]]
-name = "specification"
-harness = false
+# [[test]]
+# name = "specification"
+# harness = false
 
 [dev-dependencies]
 codespan-reporting = "0.*"
@@ -46,3 +46,6 @@ missing_panics_doc = "allow"
 missing_errors_doc = "allow"
 result_unit_err = "allow"
 pedantic = { level = "warn", priority = -1 }
+
+[package.metadata.commands]
+test = "spectra test ./specification.md 'rust:.::parse_markdown'"

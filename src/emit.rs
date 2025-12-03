@@ -1,33 +1,16 @@
 use crate::{
-    MarkdownElement, MarkdownParseError, MarkdownPart, MarkdownTextElement, ParseOptions, RawText,
-    TextDecoration,
+    Frontmatter, MarkdownElement, MarkdownParseError, MarkdownPart, MarkdownTextElement,
+    ParseOptions, RawText, TextDecoration,
 };
-use std::io::Write;
+use std::fmt::Write;
 
-#[cfg(target_family = "wasm")]
-use wasm_bindgen::prelude::*;
-
-#[cfg(target_family = "wasm")]
-#[wasm_bindgen]
-pub fn markdown_to_html_string(source: &str, emitter: Option<FeatureEmitterWASM>) -> String {
-    std::panic::set_hook(Box::new(console_error_panic_hook::hook));
-    let mut bytes: Vec<u8> = Vec::new();
-    // TODO as parameter
-    let options = ParseOptions::default();
-    let _ = match emitter {
-        Some(mut emitter) => markdown_to_html(source, &mut bytes, &mut emitter, options),
-        None => markdown_to_html(source, &mut bytes, &mut BlankFeatureEmitter, options),
-    };
-    match String::from_utf8(bytes) {
-        Ok(result) => result,
-        Err(_) => String::from("Non Utf8 output or markdown parser error"),
-    }
-}
+// TODO
+// #[cfg(target_family = "wasm")]
+// mod wasm;
 
 pub fn markdown_to_html(
     source: &str,
-    out: &mut impl Write,
-    emitter: &impl FeatureEmitter,
+    emitter: &mut impl FeatureEmitter,
     options: ParseOptions,
 ) -> Result<(), MarkdownParseError<()>> {
     crate::parse_with_options::<()>(
@@ -35,243 +18,151 @@ pub fn markdown_to_html(
         options,
         crate::ContainerResidue::default(),
         |item| {
-            element_to_html(out, emitter, options, item).unwrap();
+            element_to_html(emitter, options, item).unwrap();
             Ok(())
         },
     )
 }
 
-pub trait FeatureEmitter {
-    fn code_block(&self, language: &str, code: &str) -> String;
+pub trait FeatureEmitter: std::fmt::Write {
+    fn frontmatter(&mut self, content: Frontmatter<'_>);
 
-    fn mathematics(&self, code: &str, display: bool) -> String;
+    fn code_block(&mut self, language: &str, code: &str);
 
-    fn command(
-        &self,
-        name: &str,
-        args: Vec<(&str, &str)>,
-        inner: &str,
-        options: ParseOptions,
-        to: &mut impl Write,
-    );
+    fn mathematics(&mut self, code: &str, display: bool);
 
-    fn interpolation(&self, expression: &str) -> String;
+    fn command(&mut self, name: &str, args: Vec<(&str, &str)>, inner: &str, options: ParseOptions);
+
+    fn interpolation(&mut self, expression: &str);
 }
 
 /// Un-highlighted code and panics on `RegExp`
-pub struct BlankFeatureEmitter;
+pub struct BlankFeatureEmitter<T>(T);
 
-impl FeatureEmitter for BlankFeatureEmitter {
-    fn code_block(&self, _language: &str, code: &str) -> String {
-        // panic!("`BlankFeatureEmitter` does implement code blocks");
-        code.to_owned()
+impl<T> std::fmt::Write for BlankFeatureEmitter<T>
+where
+    T: std::fmt::Write,
+{
+    fn write_str(&mut self, s: &str) -> Result<(), std::fmt::Error> {
+        T::write_str(&mut self.0, s)
+    }
+}
+
+impl<T> FeatureEmitter for BlankFeatureEmitter<T>
+where
+    T: std::fmt::Write,
+{
+    fn frontmatter(&mut self, _content: Frontmatter<'_>) {
+        eprintln!("skipping frontmatter");
     }
 
-    fn mathematics(&self, content: &str, display: bool) -> String {
-        // panic!("`BlankFeatureEmitter` does implement LaTeX HTML generation");
-        if display {
-            format!("$${content}$$")
-        } else {
-            format!("${content}$")
-        }
+    fn code_block(&mut self, _language: &str, _code: &str) {
+        panic!("`BlankFeatureEmitter` does implement code blocks");
+        // code.to_owned()
+    }
+
+    fn mathematics(&mut self, _content: &str, _display: bool) {
+        panic!("`BlankFeatureEmitter` does implement LaTeX HTML generation");
+        // if display {
+        //     format!("$${content}$$")
+        // } else {
+        //     format!("${content}$")
+        // }
     }
 
     fn command(
-        &self,
+        &mut self,
         _name: &str,
         _args: Vec<(&str, &str)>,
         _inner: &str,
         _options: ParseOptions,
-        _to: &mut impl Write,
     ) {
         panic!("`BlankFeatureEmitter` does implement command generation")
     }
 
-    fn interpolation(&self, _expression: &str) -> String {
+    fn interpolation(&mut self, _expression: &str) {
         panic!("`BlankFeatureEmitter` does implement interpolation")
-    }
-}
-
-#[cfg(target_family = "wasm")]
-#[wasm_bindgen(skip_typescript)]
-pub struct FeatureEmitterWASM {
-    code_block_callback: js_sys::Function,
-    mathematics_callback: js_sys::Function,
-    command_callback: js_sys::Function,
-    interpolation_callback: js_sys::Function,
-}
-
-#[cfg(target_family = "wasm")]
-#[wasm_bindgen(typescript_custom_section)]
-const TS_APPEND_CONTENT: &'static str = r#"
-export class FeatureEmitterWASM { 
-    constructor(
-        code_block_callback: (language: string, code: string) => string,
-        mathematics_callback: (code: string) => string,
-        command_callback: (name: string, args: Array<[string, string]>, inner: string) => string,
-        interpolation_callback: (expression: string) => string,
-    );
-}
-"#;
-
-#[cfg(target_family = "wasm")]
-#[wasm_bindgen]
-impl FeatureEmitterWASM {
-    #[wasm_bindgen(constructor)]
-    pub fn new(
-        code_block_callback: js_sys::Function,
-        mathematics_callback: js_sys::Function,
-        command_callback: js_sys::Function,
-        interpolation_callback: js_sys::Function,
-    ) -> Self {
-        Self {
-            code_block_callback,
-            mathematics_callback,
-            command_callback,
-            interpolation_callback,
-        }
-    }
-}
-
-#[cfg(target_family = "wasm")]
-fn result_to_string(result: Result<JsValue, JsValue>) -> String {
-    result
-        .ok()
-        .as_ref()
-        .and_then(JsValue::as_string)
-        .unwrap_or_else(|| "Error".to_owned())
-}
-
-#[cfg(target_family = "wasm")]
-impl FeatureEmitter for FeatureEmitterWASM {
-    fn code_block(&self, language: &str, code: &str) -> String {
-        let result = self.code_block_callback.call2(
-            &JsValue::NULL,
-            &JsValue::from_str(language),
-            &JsValue::from_str(code),
-        );
-        result_to_string(result)
-    }
-
-    fn mathematics(&self, code: &str, display: bool) -> String {
-        let result = self.mathematics_callback.call1(
-            &JsValue::NULL,
-            &JsValue::from_str(code),
-            &JsValue::from_bool(display),
-        );
-        result_to_string(result)
-    }
-
-    fn command(
-        &self,
-        name: &str,
-        args: Vec<(&str, &str)>,
-        inner: &str,
-        _options: ParseOptions,
-        to: &mut impl Write,
-    ) {
-        use js_sys::Array;
-
-        let args_array = Array::new();
-        args.into_iter().for_each(|(l, r)| {
-            args_array.push(&Array::of2(&JsValue::from_str(l), &JsValue::from_str(r)).into());
-        });
-        let result = self.command_callback.call3(
-            &JsValue::NULL,
-            &JsValue::from_str(name),
-            &args_array.into(),
-            &JsValue::from_str(inner),
-        );
-        write!(to, "{}", result_to_string(result));
-    }
-
-    fn interpolation(&self, expression: &str) -> String {
-        let result = self
-            .interpolation_callback
-            .call1(&JsValue::NULL, &JsValue::from_str(expression));
-        result_to_string(result)
     }
 }
 
 #[allow(clippy::too_many_lines)]
 pub fn element_to_html(
-    out: &mut impl Write,
-    emitter: &impl FeatureEmitter,
+    emitter: &mut impl FeatureEmitter,
     options: ParseOptions,
     item: MarkdownElement,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match item {
         MarkdownElement::Heading { level, content } => {
             assert!(level < 7, "heading level too much for HTML");
-            writeln!(out, "<h{level}>")?;
-            inner_to_html(out, emitter, content)?;
-            writeln!(out, "</h{level}>")?;
+            writeln!(emitter, "<h{level}>")?;
+            inner_to_html(emitter, content)?;
+            writeln!(emitter, "</h{level}>")?;
         }
         MarkdownElement::Quote(block) => {
-            writeln!(out, "<blockquote")?;
+            writeln!(emitter, "<blockquote")?;
             if let Some(alert) = block.alert {
                 // TODO
                 write!(
-                    out,
+                    emitter,
                     " data-quote-alert=\"{alert}\">",
                     alert = alert.to_lowercase()
                 )
                 .unwrap();
             } else {
-                write!(out, ">")?;
+                write!(emitter, ">")?;
             }
             let crate::RawMarkdown(inner, container_residue) = block.inner;
-            let _ = crate::parse_with_options(inner, options, container_residue, |_item| {
-                element_to_html(out, emitter, options, item)
+            let _ = crate::parse_with_options(inner, options, container_residue, |item| {
+                element_to_html(emitter, options, item)
             });
-            writeln!(out, "</blockquote>")?;
+            writeln!(emitter, "</blockquote>")?;
         }
         MarkdownElement::Paragraph(content) => {
             if content.0.starts_with("![") || content.0.starts_with("[![") {
                 // Don't wrap media in `<p>`
-                inner_to_html(out, emitter, content)?;
+                inner_to_html(emitter, content)?;
             } else {
-                writeln!(out, "<p>")?;
-                inner_to_html(out, emitter, content)?;
-                writeln!(out, "</p>")?;
+                writeln!(emitter, "<p>")?;
+                inner_to_html(emitter, content)?;
+                writeln!(emitter, "</p>")?;
             }
         }
         MarkdownElement::List(list) => {
             let tag_name = if list.is_ordered() { "ol" } else { "ul" };
-            writeln!(out, "<{tag_name}>")?;
+            writeln!(emitter, "<{tag_name}>")?;
             list.parse_inner::<Box<dyn std::error::Error>>(|item| {
-                writeln!(out, "<li>")?;
+                writeln!(emitter, "<li>")?;
                 let crate::RawMarkdown(inner, container_residue) = item.content;
                 crate::parse_with_options(inner, options, container_residue, |item| {
-                    element_to_html(out, emitter, options, item)
+                    element_to_html(emitter, options, item)
                 })?;
-                writeln!(out, "</li>")?;
+                writeln!(emitter, "</li>")?;
                 Ok(())
             })?;
-            writeln!(out, "</{tag_name}>")?;
+            writeln!(emitter, "</{tag_name}>")?;
         }
         MarkdownElement::Table(table) => {
-            writeln!(out, "<table>")?;
+            writeln!(emitter, "<table>")?;
             let mut rows = table.rows();
-            writeln!(out, "<thead><tr>")?;
+            writeln!(emitter, "<thead><tr>")?;
             for cell in rows.next().unwrap().cells() {
-                write!(out, "<th>")?;
-                inner_to_html(out, emitter, cell)?;
-                writeln!(out, "</th>")?;
+                write!(emitter, "<th>")?;
+                inner_to_html(emitter, cell)?;
+                writeln!(emitter, "</th>")?;
             }
-            writeln!(out, "</tr></thead>")?;
-            writeln!(out, "<tbody>")?;
+            writeln!(emitter, "</tr></thead>")?;
+            writeln!(emitter, "<tbody>")?;
             for row in rows {
-                write!(out, "<tr>")?;
+                write!(emitter, "<tr>")?;
                 for cell in row.cells() {
-                    write!(out, "<td>")?;
-                    inner_to_html(out, emitter, cell)?;
-                    write!(out, "</td>")?;
+                    write!(emitter, "<td>")?;
+                    inner_to_html(emitter, cell)?;
+                    write!(emitter, "</td>")?;
                 }
-                writeln!(out, "</tr>")?;
+                writeln!(emitter, "</tr>")?;
             }
-            writeln!(out, "</tbody>")?;
-            writeln!(out, "</table>")?;
+            writeln!(emitter, "</tbody>")?;
+            writeln!(emitter, "</table>")?;
         }
         MarkdownElement::CodeBlock(
             block @ crate::CodeBlock {
@@ -281,21 +172,13 @@ pub fn element_to_html(
             },
         ) => {
             let code = block.content();
-            let inner = emitter.code_block(language, &code);
-            writeln!(
-                out,
-                "<pre data-language=\"{language}\"><code>{inner}</code></pre>"
-            )?;
+            emitter.code_block(language, &code);
         }
         MarkdownElement::MathematicsBlock(crate::MathematicsBlock(script)) => {
-            writeln!(
-                out,
-                "<p class=\"mathematics block\">{inner}</p>",
-                inner = emitter.mathematics(script, true)
-            )?;
+            emitter.mathematics(script, true);
         }
         MarkdownElement::HorizontalRule => {
-            writeln!(out, "<hr>")?;
+            writeln!(emitter, "<hr>")?;
         }
         MarkdownElement::CommandBlock(command) => {
             emitter.command(
@@ -303,16 +186,14 @@ pub fn element_to_html(
                 command.parse_arguments(),
                 command.inner.0,
                 options,
-                out,
             );
         }
         MarkdownElement::HTMLElement(html) => {
-            writeln!(out, "{content}", content = html.0)?;
+            writeln!(emitter, "{content}", content = html.0)?;
         }
-        // writeln!(out, "<pre class=\"frontmatter\">{}</pre>", inner.0)?;
-        MarkdownElement::Frontmatter(_)
-        | MarkdownElement::CommentBlock(_)
-        | MarkdownElement::Empty => {}
+        // writeln!(emitter, "<pre class=\"frontmatter\">{}</pre>", inner.0)?;
+        MarkdownElement::Frontmatter(frontmatter) => emitter.frontmatter(frontmatter),
+        MarkdownElement::CommentBlock(_) | MarkdownElement::Empty => {}
     }
 
     // #[cfg(feature = "html")]
@@ -323,11 +204,11 @@ pub fn element_to_html(
     //         emitter: &impl FeatureEmitter,
     //         options: ParseOptions,
     //     ) -> Result<(), Box<dyn std::error::Error>> {
-    //         write!(out, "<{tag_name}", tag_name = element.tag_name)?;
+    //         write!(emitter, "<{tag_name}", tag_name = element.tag_name)?;
     //         for lightml::Attribute { key, value } in &element.attributes {
-    //             write!(out, " \"{key}\"=\"{value}\"")?;
+    //             write!(emitter, " \"{key}\"=\"{value}\"")?;
     //         }
-    //         writeln!(out, ">")?;
+    //         writeln!(emitter, ">")?;
     //         match element.children {
     //             lightml::ElementChildren::Children(ref children) => {
     //                 for child in children {
@@ -345,11 +226,11 @@ pub fn element_to_html(
     //                         | lightml::Node::MismatchClosingTag(_) => {}
     //                     }
     //                 }
-    //                 writeln!(out, "</{tag_name}>", tag_name = element.tag_name)?;
+    //                 writeln!(emitter, "</{tag_name}>", tag_name = element.tag_name)?;
     //             }
     //             lightml::ElementChildren::SelfClosing => {}
     //             lightml::ElementChildren::Literal(ref content) => {
-    //                 writeln!(out, "{content}\n</{tag_name}>", tag_name = element.tag_name)?;
+    //                 writeln!(emitter, "{content}\n</{tag_name}>", tag_name = element.tag_name)?;
     //             }
     //         }
     //         Ok(())
@@ -362,45 +243,44 @@ pub fn element_to_html(
 }
 
 pub fn inner_to_html(
-    out: &mut impl Write,
-    emitter: &impl FeatureEmitter,
+    emitter: &mut impl FeatureEmitter,
     content: RawText,
 ) -> Result<(), Box<dyn std::error::Error>> {
     fn update_decoration(
-        out: &mut impl Write,
+        emitter: &mut impl Write,
         opening: TextDecoration,
         closing: TextDecoration,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if opening.contains(TextDecoration::BOLD) {
-            write!(out, "<bold>")?;
+            write!(emitter, "<bold>")?;
         } else if closing.contains(TextDecoration::BOLD) {
-            write!(out, "</bold>")?;
+            write!(emitter, "</bold>")?;
         }
         if opening.contains(TextDecoration::EMPHASIS) {
-            write!(out, "<em>")?;
+            write!(emitter, "<em>")?;
         } else if closing.contains(TextDecoration::EMPHASIS) {
-            write!(out, "</em>")?;
+            write!(emitter, "</em>")?;
         }
         if opening.contains(TextDecoration::HIGHLIGHTED) {
             // FUTURE change default
-            write!(out, "<span style=\"background-color: yellow\">")?;
+            write!(emitter, "<span style=\"background-color: yellow\">")?;
         } else if closing.contains(TextDecoration::HIGHLIGHTED) {
-            write!(out, "</span>")?;
+            write!(emitter, "</span>")?;
         }
         if opening.contains(TextDecoration::STRIKETHROUGH) {
-            write!(out, "<s>")?;
+            write!(emitter, "<s>")?;
         } else if closing.contains(TextDecoration::STRIKETHROUGH) {
-            write!(out, "</s>")?;
+            write!(emitter, "</s>")?;
         }
         if opening.contains(TextDecoration::SUBSCRIPT) {
-            write!(out, "<sub>")?;
+            write!(emitter, "<sub>")?;
         } else if closing.contains(TextDecoration::SUBSCRIPT) {
-            write!(out, "</sub>")?;
+            write!(emitter, "</sub>")?;
         }
         if opening.contains(TextDecoration::SUPERSCRIPT) {
-            write!(out, "<sup>")?;
+            write!(emitter, "<sup>")?;
         } else if closing.contains(TextDecoration::SUPERSCRIPT) {
-            write!(out, "</sup>")?;
+            write!(emitter, "</sup>")?;
         }
         Ok(())
     }
@@ -413,43 +293,41 @@ pub fn inner_to_html(
     } in content.parts()
     {
         let difference = current ^ decoration;
-        update_decoration(out, difference & decoration, difference & current)?;
+        update_decoration(emitter, difference & decoration, difference & current)?;
         match kind {
-            MarkdownPart::Plain => write!(out, "{on}", on = escape_string_content(on))?,
+            MarkdownPart::Plain => write!(emitter, "{on}", on = escape_string_content(on))?,
             MarkdownPart::InlineCode => {
-                write!(out, "<code>{on}</code>", on = escape_string_content(on))?;
+                write!(emitter, "<code>{on}</code>", on = escape_string_content(on))?;
             }
-            MarkdownPart::InlineMathematics => write!(
-                out,
-                "<span class=\"mathematics inline\">{out}</span>",
-                out = emitter.mathematics(on, false)
-            )?,
-            MarkdownPart::Emoji => write!(out, "")?,
-            MarkdownPart::Tag => write!(out, "")?,
-            MarkdownPart::Interpolation => write!(out, "")?,
-            MarkdownPart::RawLink => write!(out, "<a href=\"{on}\">{on}</a>")?,
+            MarkdownPart::InlineMathematics => emitter.mathematics(on, false),
+            MarkdownPart::Emoji => write!(emitter, "")?,
+            MarkdownPart::Tag => write!(emitter, "")?,
+            MarkdownPart::Interpolation => write!(emitter, "")?,
+            MarkdownPart::RawLink => write!(emitter, "<a href=\"{on}\">{on}</a>")?,
             MarkdownPart::ExternalLink { to } => write!(
-                out,
+                emitter,
                 "<a href=\"{to}\">{on}</a>",
                 on = escape_string_content(on)
             )?,
             MarkdownPart::MediaLink { source, alt } => write!(
-                out,
+                emitter,
                 "<img src=\"{source}\" alt=\"{alt}\">",
                 alt = escape_string_content(alt)
             )?,
-            MarkdownPart::LineBreak => write!(out, "<br>",)?,
+            MarkdownPart::LineBreak => write!(emitter, "<br>",)?,
             // FUTURE improve
             MarkdownPart::InternalLink { to } => write!(
-                out,
+                emitter,
                 "<a href=\"#{to}\">{on}</a>",
                 on = escape_string_content(on)
             )?,
-            MarkdownPart::HTMLElement(element) => write!(out, "{content}", content = element.0)?,
+            MarkdownPart::HTMLElement(element) => {
+                write!(emitter, "{content}", content = element.0)?
+            }
         }
         current = decoration;
     }
-    update_decoration(out, TextDecoration::NONE, current)?;
+    update_decoration(emitter, TextDecoration::NONE, current)?;
     Ok(())
 }
 

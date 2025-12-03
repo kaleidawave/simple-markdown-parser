@@ -51,28 +51,6 @@ pub(crate) fn find_new_line_sequence(on: &str) -> Option<(usize, usize)> {
     }
 }
 
-pub(crate) fn html_balanced(on: &str, tag_name: &str) -> bool {
-    // FUTURE needs improving
-    let mut depth: u8 = 0;
-    for (idx, _) in on.match_indices('<') {
-        let rest = &on[idx..];
-        let (offset, new_depth) = if rest.starts_with("</") {
-            (2, depth.saturating_sub(1))
-        } else {
-            (1, depth + 1)
-        };
-        let out = rest
-            .get(offset..)
-            .unwrap_or_default()
-            .split_once(|chr: char| !chr.is_alphanumeric())
-            .map_or(rest, |(l, _)| l);
-        if out == tag_name {
-            depth = new_depth;
-        }
-    }
-    depth == 0
-}
-
 pub struct EdibleLines<'a> {
     start: usize,
     last: usize,

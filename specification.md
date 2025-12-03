@@ -1,4 +1,4 @@
-# Markdown
+clear# Markdown
 
 This document is a list of all *markdown* features supported in the parser.
 
@@ -135,11 +135,9 @@ Items can be visually *grouped* as a with `-`
 ```
 List([
 	ListItem {
-		enumerated: false, checked: None,
 		inner: "something"
 	},
 	ListItem {
-		enumerated: false, checked: None,
 		inner: "another thing"
 	}
 ])
@@ -161,17 +159,14 @@ Using tab indentation we can add nest lists under lists
 ```
 List([
 	ListItem {
-		enumerated: false, checked: None,
 		inner: [
 			Paragraph("First item"),
 			List([
 				ListItem {
-					enumerated: false, checked: None,
 					inner: [
 						Paragraph("Nested one"),
 						List([
 							ListItem {
-								enumerated: false, checked: None,
 								inner: "Deep"
 							}
 						])
@@ -181,16 +176,13 @@ List([
 		]
 	},
 	ListItem {
-		enumerated: false, checked: None,
 		inner: [
 			Paragraph("Second item"),
 			List([
 				ListItem {
-					enumerated: false, checked: None,
 					inner: "One"
 				},
 				ListItem {
-					enumerated: false, checked: None,
 					inner: "Two"
 				}
 			])
@@ -212,15 +204,15 @@ We can prefix with increasing numerals for enumerated lists
 ```
 List([
 	ListItem {
-		enumerated: true, checked: None,
+		enumerated: true,
 		inner: "Hi"
 	},
 	ListItem {
-		enumerated: true, checked: None,
+		enumerated: true,
 		inner: "Something"
 	},
 	ListItem {
-		enumerated: true, checked: None,
+		enumerated: true,
 		inner: "X"
 	}
 ])
@@ -236,11 +228,11 @@ List([
 ```
 List([
 	ListItem {
-		enumerated: false, checked: Some(true),
+		checked: Some(true),
 		inner: "Write specification"
 	},
 	ListItem {
-		enumerated: false, checked: Some(false),
+		checked: Some(false),
 		inner: "Complete tests"
 	}
 ])
@@ -258,11 +250,9 @@ List([
 ```
 List([
 	ListItem {
-		enumerated: false, checked: None,
 		inner: "hi"
 	},
 	ListItem {
-		enumerated: false, checked: None,
 		inner: "hello"
 	}
 ])
@@ -278,12 +268,10 @@ List([
 ```
 List([
 	ListItem {
-		enumerated: false, checked: None,
-		inner: [Plain("Bold", bold)]
+		inner: [Plain(bold: "Bold")]
 	},
 	ListItem {
-		enumerated: false, checked: None,
-		inner: [Plain("Italic", emphasised)]
+		inner: [Plain(emphasised: "Italic")]
 	}
 ])
 ```
@@ -298,7 +286,6 @@ List([
 ```
 List([
 	ListItem {
-		enumerated: false, checked: None,
 		inner: [
 			Paragraph("List item"),
 			QuoteBlock {
@@ -491,7 +478,7 @@ Table([["col1", "col2"], ["something", "another"], ["x", "y"]])
 ```
 
 ```
-Table([["col1", "col2"], [[InlineMathematics("something")], "another"], ["x", [Plain("y", bold)]]])
+Table([["col1", "col2"], [[InlineMathematics("something")], "another"], ["x", [Plain(bold: "y")]]])
 ```
 
 ### Horizontal rule
@@ -505,7 +492,7 @@ some text
 more text
 ```
 
-> We have to have text here because otherwise it is treated as a frontmatter :/
+> We have to start the block with text here because otherwise it is treated as a frontmatter :/
 
 ```
 Paragraph("some text")
@@ -572,6 +559,18 @@ Something here
 
 ```
 CommandBlock { name: if, arguments: [("", "true")], inner: [Paragraph("Something here")] }
+```
+
+#### Blocks (`end*` syntax)
+
+```md
+{% center %}
+Something here
+{% endcenter %}
+```
+
+```
+CommandBlock { name: center, arguments: [], inner: [Paragraph("Something here")] }
 ```
 
 ### Block HTML elements
@@ -696,7 +695,7 @@ This is *emphasised* text
 ```
 
 ```
-Paragraph([Plain("This is "), Plain("emphasised", emphasised), Plain(" text")])
+Paragraph([Plain("This is "), Plain(emphasised: "emphasised"), Plain(" text")])
 ```
 
 ### Bold
@@ -706,7 +705,7 @@ This is **bold** text
 ```
 
 ```
-Paragraph([Plain("This is "), Plain("bold", bold), Plain(" text")])
+Paragraph([Plain("This is "), Plain(bold: "bold"), Plain(" text")])
 ```
 
 #### Bold in emphasis
@@ -716,7 +715,7 @@ This is **bold and _emphasised_** text
 ```
 
 ```
-Paragraph([Plain("This is "), Plain("bold and ", bold), Plain("emphasised", bold, emphasised), Plain(" text")])
+Paragraph([Plain("This is "), Plain(bold: "bold and "), Plain(bold & emphasised: "emphasised"), Plain(" text")])
 ```
 
 #### Bold and emphasised
@@ -726,7 +725,7 @@ This is ***bold and emphasised*** text
 ```
 
 ```
-Paragraph([Plain("This is "), Plain("bold and emphasised", bold, emphasised), Plain(" text")])
+Paragraph([Plain("This is "), Plain(bold & emphasised: "bold and emphasised"), Plain(" text")])
 ```
 
 #### Bold in code
@@ -736,7 +735,7 @@ This is **bold `return 0`** text
 ```
 
 ```
-Paragraph([Plain("This is "), Plain("bold ", bold), InlineCode("return 0", bold), Plain(" text")])
+Paragraph([Plain("This is "), Plain(bold: "bold "), InlineCode(bold: "return 0"), Plain(" text")])
 ```
 
 ### Links
@@ -816,7 +815,7 @@ Two tildas `~` cross out certain text.
 ```
 
 ```
-Paragraph([Plain("cross this out", strikethrough)])
+Paragraph([Plain(strikethrough: "cross this out")])
 ```
 
 ### Tags
@@ -850,8 +849,8 @@ Ozone layer O~3~
 ```
 
 ```
-Paragraph([Plain("The 16"), Plain("th", superscript), Plain(" of November")])
-Paragraph([Plain("Ozone layer O"), Plain("3", subscript)])
+Paragraph([Plain("The 16"), Plain(superscript: "th"), Plain(" of November")])
+Paragraph([Plain("Ozone layer O"), Plain(subscript: "3")])
 ```
 
 ### Inline HTML elements
@@ -886,4 +885,41 @@ Paragraph([Plain("The day is "), Interpolation("date"), Plain(".")])
 
 ```
 Paragraph([MediaLink { source: "https://project-information-kaleidawave.val.run/project/simple-markdown-parser/badge", alt: "LOC badge" } , ExternalLink { to: "https://crates.io/crates/simple-markdown-parser" } ("![crates.io badge](https://img.shields.io/crates/v/simple-markdown-parser?style=flat-square)"), ExternalLink { to: "https://docs.rs/simple-markdown-parser/latest" } ("![docs.rs badge](https://img.shields.io/docsrs/simple-markdown-parser?style=flat-square)")])
+```
+
+## More
+
+### Lists break paragraphs
+
+```md
+Thing
+1) one
+2) two
+
+Another
+- a
+- b
+```
+
+```
+Paragraph("Thing")
+List([
+	ListItem {
+		enumerated: true,
+		inner: "one"
+	},
+	ListItem {
+		enumerated: true,
+		inner: "two"
+	}
+])
+Paragraph("Another")
+List([
+	ListItem {
+		inner: "a"
+	},
+	ListItem {
+		inner: "b"
+	}
+])
 ```

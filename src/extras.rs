@@ -1,12 +1,11 @@
 use super::{MarkdownElement, MarkdownPart, MarkdownTextElement, TextDecoration};
+use std::io::Write;
 
 #[derive(Default, Clone, Copy)]
 pub struct AsMarkdownOptions {
     pub uses_crlf: bool,
     pub skip_comments: bool,
 }
-
-use std::io::Write;
 
 impl MarkdownElement<'_> {
     #[allow(clippy::too_many_lines)]
@@ -174,9 +173,9 @@ impl MarkdownElement<'_> {
     #[allow(clippy::too_many_lines)]
     #[must_use]
     pub fn debug_with_options(&self, options: DebugOptions) -> String {
-        fn from_parts(content: &crate::RawText<'_>, _options: DebugOptions) -> String {
-            use std::fmt::Write;
+        use std::fmt::Write;
 
+        fn from_parts(content: &crate::RawText<'_>, _options: DebugOptions) -> String {
             let parts = content.parts().collect::<Vec<_>>();
             if let &[MarkdownTextElement {
                 on,
@@ -199,27 +198,31 @@ impl MarkdownElement<'_> {
                         continue;
                     }
                     s.push('(');
-                    write!(&mut s, "{:?}", part.on).unwrap();
                     if part.decoration != TextDecoration::NONE {
-                        if part.decoration.contains(TextDecoration::BOLD) {
-                            s.push_str(", bold");
-                        }
-                        if part.decoration.contains(TextDecoration::EMPHASIS) {
-                            s.push_str(", emphasised");
+                        // TODO as set or something?
+                        if part.decoration.contains(TextDecoration::BOLD)
+                            && part.decoration.contains(TextDecoration::EMPHASIS)
+                        {
+                            s.push_str("bold & emphasised: ");
+                        } else if part.decoration.contains(TextDecoration::BOLD) {
+                            s.push_str("bold: ");
+                        } else if part.decoration.contains(TextDecoration::EMPHASIS) {
+                            s.push_str("emphasised: ");
                         }
                         if part.decoration.contains(TextDecoration::HIGHLIGHTED) {
-                            s.push_str(", highlighted");
+                            s.push_str("highlighted: ");
                         }
                         if part.decoration.contains(TextDecoration::STRIKETHROUGH) {
-                            s.push_str(", strikethrough");
+                            s.push_str("strikethrough: ");
                         }
                         if part.decoration.contains(TextDecoration::SUPERSCRIPT) {
-                            s.push_str(", superscript");
+                            s.push_str("superscript: ");
                         }
                         if part.decoration.contains(TextDecoration::SUBSCRIPT) {
-                            s.push_str(", subscript");
+                            s.push_str("subscript: ");
                         }
                     }
+                    write!(&mut s, "{:?}", part.on).unwrap();
                     s.push(')');
                 }
                 s.push(']');
@@ -252,65 +255,94 @@ impl MarkdownElement<'_> {
                     "...".to_owned()
                 } else {
                     let mut list_items = "[".to_owned();
+
                     // FUTURE pass options down?
                     let parse_options = crate::ParseOptions::default();
-                    list.parse_inner::<()>(|crate::ListItem { content, checked, enumerated }| {
-                        let options = options.next();
-                        let mut inner = "[".to_owned();
-                        if options.pretty {
-                            inner.push_str(new_line);
-                        }
-                        // We can simplify the output if it is just a paragraph
-                        let mut just_paragraph = None;
-
-                        let _result = crate::parse_with_options::<()>(
-                            content.0,
-                            parse_options,
-                            content.1,
-                            |item| {
-                                if inner.trim_end().len() > 1 {
-                                    let _ = just_paragraph.take();
-                                    if options.pretty {
-                                        inner.push(',');
-                                        inner.push_str(new_line);
-                                    } else {
-                                        inner.push_str(", ");
-                                    }
-                                } else if let MarkdownElement::Paragraph(item) = item {
-                                    just_paragraph = Some(item);
-                                }
-                                inner.push_str(&item.debug_with_options(options.next().next()));
-                                Ok(())
-                            },
-                        );
-                        let indent = options.get_indent();
-                        let next_indent = options.next().get_indent();
-                        let inner = if let Some(just_paragraph) = just_paragraph {
-                            from_parts(&just_paragraph, options)
-                        } else {
+                    list.parse_inner::<()>(
+                        |crate::ListItem {
+                             content,
+                             checked,
+                             enumerated,
+                         }| {
+                            let options = options.next();
+                            let mut inner = "[".to_owned();
                             if options.pretty {
                                 inner.push_str(new_line);
-                                inner.push_str(next_indent);
                             }
-                            inner.push(']');
-                            inner
-                        };
-                        let item = if options.pretty {
-                            format!("ListItem {{\n{next_indent}enumerated: {enumerated:?}, checked: {checked:?},\n{next_indent}inner: {inner}\n{indent}}}")
-                        } else {
-                            format!("ListItem {{ enumerated: {enumerated:?}, checked: {checked:?}, inner: {inner} }}")
-                        };
+                            // We can simplify the output if it is just a paragraph
+                            let mut just_paragraph = None;
 
-                        if list_items.trim().len() > 1 {
-                            list_items.push_str(if options.pretty {"," }  else { ", " });
-                        }
-                        if options.pretty {
-                            list_items.push_str(new_line);
-                            list_items.push_str(indent);
-                        }
-                        list_items.push_str(&item);
-                        Ok(())
-                    }).unwrap();
+                            let _result = crate::parse_with_options::<()>(
+                                content.0,
+                                parse_options,
+                                content.1,
+                                |item| {
+                                    if inner.trim_end().len() > 1 {
+                                        let _ = just_paragraph.take();
+                                        if options.pretty {
+                                            inner.push(',');
+                                            inner.push_str(new_line);
+                                        } else {
+                                            inner.push_str(", ");
+                                        }
+                                    } else if let MarkdownElement::Paragraph(item) = item {
+                                        just_paragraph = Some(item);
+                                    }
+                                    inner.push_str(&item.debug_with_options(options.next().next()));
+                                    Ok(())
+                                },
+                            );
+                            let indent = options.get_indent();
+                            let next_indent = options.next().get_indent();
+
+                            let inner = if let Some(just_paragraph) = just_paragraph {
+                                from_parts(&just_paragraph, options)
+                            } else {
+                                if options.pretty {
+                                    inner.push_str(new_line);
+                                    inner.push_str(next_indent);
+                                }
+                                inner.push(']');
+                                inner
+                            };
+
+                            if list_items.trim().len() > 1 {
+                                list_items.push_str(if options.pretty { "," } else { ", " });
+                            }
+
+                            if options.pretty {
+                                list_items.push_str(new_line);
+                                list_items.push_str(indent);
+                            }
+
+                            if options.pretty {
+                                writeln!(&mut list_items, "ListItem {{").unwrap();
+                                if enumerated {
+                                    writeln!(&mut list_items, "{next_indent}enumerated: true,")
+                                        .unwrap();
+                                }
+                                if checked.is_some() {
+                                    writeln!(&mut list_items, "{next_indent}checked: {checked:?},")
+                                        .unwrap();
+                                }
+                                writeln!(&mut list_items, "{next_indent}inner: {inner}").unwrap();
+                                write!(&mut list_items, "{indent}}}").unwrap();
+                            } else {
+                                write!(&mut list_items, "ListItem {{").unwrap();
+                                if enumerated {
+                                    write!(&mut list_items, " enumerated: true,").unwrap();
+                                }
+                                if checked.is_some() {
+                                    write!(&mut list_items, " checked: {checked:?},").unwrap();
+                                }
+                                write!(&mut list_items, " inner: {inner}").unwrap();
+                                write!(&mut list_items, "}}").unwrap();
+                            }
+                            Ok(())
+                        },
+                    )
+                    .unwrap();
+
                     if options.pretty {
                         list_items.push_str(new_line);
                         list_items.push_str(options.get_indent());
@@ -321,35 +353,35 @@ impl MarkdownElement<'_> {
                 format!("{indent}List({inner})")
             }
             MarkdownElement::Quote(crate::QuoteBlock { alert, inner }) => {
-                let inner = if options.indent >= options.skip_content_after {
+                let inner_buf = if options.indent >= options.skip_content_after {
                     "...".to_string()
                 } else {
-                    let crate::RawMarkdown(content, container_residue) = *inner;
-                    let mut inner = "[".to_owned();
+                    let crate::RawMarkdown(inner, container_residue) = *inner;
+                    let mut inner_buf = "[".to_owned();
                     if options.pretty {
-                        inner.push_str(new_line);
+                        inner_buf.push_str(new_line);
                     }
                     // We can simplify the output if it is just a paragraph
                     let mut just_paragraph = None;
                     let parse_options = crate::ParseOptions::default();
 
                     let _result = crate::parse_with_options::<()>(
-                        content,
+                        &inner,
                         parse_options,
                         container_residue,
                         |item| {
-                            if inner.trim_end().len() > 1 {
+                            if inner_buf.trim_end().len() > 1 {
                                 let _ = just_paragraph.take();
                                 if options.pretty {
-                                    inner.push(',');
-                                    inner.push_str(new_line);
+                                    inner_buf.push(',');
+                                    inner_buf.push_str(new_line);
                                 } else {
-                                    inner.push_str(", ");
+                                    inner_buf.push_str(", ");
                                 }
                             } else if let MarkdownElement::Paragraph(item) = item {
                                 just_paragraph = Some(item);
                             }
-                            inner.push_str(&item.debug_with_options(options.next().next()));
+                            inner_buf.push_str(&item.debug_with_options(options.next().next()));
                             Ok(())
                         },
                     );
@@ -358,11 +390,11 @@ impl MarkdownElement<'_> {
                         from_parts(&just_paragraph, options)
                     } else {
                         if options.pretty {
-                            inner.push_str(new_line);
-                            inner.push_str(next_indent);
+                            inner_buf.push_str(new_line);
+                            inner_buf.push_str(next_indent);
                         }
-                        inner.push(']');
-                        inner
+                        inner_buf.push(']');
+                        inner_buf
                     }
                 };
 
@@ -370,15 +402,17 @@ impl MarkdownElement<'_> {
                 if options.pretty {
                     let next_indent = options.next().get_indent();
                     if let Some(alert) = alert {
-                        format!("{indent}QuoteBlock {{\n{next_indent}alert: {alert:?},\n{next_indent}inner: {inner}\n{indent}}}")
+                        format!("{indent}QuoteBlock {{\n{next_indent}alert: {alert:?},\n{next_indent}inner: {inner_buf}\n{indent}}}")
                     } else {
-                        format!("{indent}QuoteBlock {{\n{next_indent}inner: {inner}\n{indent}}}")
+                        format!(
+                            "{indent}QuoteBlock {{\n{next_indent}inner: {inner_buf}\n{indent}}}"
+                        )
                     }
                 } else {
                     if let Some(alert) = alert {
-                        format!("{indent}QuoteBlock {{ alert: {alert:?}, inner: {inner} }}")
+                        format!("{indent}QuoteBlock {{ alert: {alert:?}, inner: {inner_buf} }}")
                     } else {
-                        format!("{indent}QuoteBlock {{ inner: {inner} }}")
+                        format!("{indent}QuoteBlock {{ inner: {inner_buf} }}")
                     }
                 }
             }

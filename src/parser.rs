@@ -13,6 +13,7 @@ pub struct ParseOptions {
     pub record_empty_lines: bool,
     pub indented_code_blocks: bool,
     pub tilda_code_blocks: bool,
+    pub end_command_syntax: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -35,9 +36,6 @@ enum State<'a> {
         alert: Option<&'a str>,
     },
     List,
-    HTMLElement {
-        tag_name: &'a str,
-    },
 }
 
 pub struct MarkdownParser<'a, F> {
@@ -160,12 +158,20 @@ where
             }
             State::Command { name, arguments } => {
                 if let Some(command_line) = utilities::strip_surrounds(line, "{%", "%}") {
-                    let is_end_of_current_command = command_line
-                        .trim()
-                        .strip_prefix('/')
-                        .is_some_and(|command| name == command);
+                    let command_line = command_line.trim();
 
-                    if is_end_of_current_command {
+                    let inner = if let Some(name) = command_line.strip_prefix('/') {
+                        Some(name)
+                    } else if let (true, Some(name)) = (
+                        self.options.end_command_syntax,
+                        command_line.strip_prefix("end"),
+                    ) {
+                        Some(name)
+                    } else {
+                        None
+                    };
+
+                    if inner.is_some_and(|command| command.trim() == name) {
                         let (inner, _) = section.rsplit_once('\n').unwrap();
                         let inner = RawMarkdown(inner, ContainerResidue::default());
                         let command_block = CommandBlock {
@@ -191,7 +197,7 @@ where
                 }
             }
             State::CommandHeader => {
-                if let Some(command_line) = line.strip_prefix("%}") {
+                if let Some(command_line) = line.strip_suffix("%}") {
                     if let Some(command_line) = command_line.strip_suffix('/') {
                         let (current_command, arguments) =
                             command_line.split_once(' ').unwrap_or((command_line, ""));
@@ -222,20 +228,6 @@ where
                 if let "---" = line.trim() {
                     let frontmatter = Frontmatter(section);
                     invoke!(MarkdownElement::Frontmatter(frontmatter));
-                }
-            }
-            State::HTMLElement { tag_name } => {
-                if line.trim_end().ends_with('>') {
-                    let is_comment_end = tag_name == "!--" && line.ends_with("-->");
-                    let is_tag_end = line
-                        .rsplit_once("</")
-                        .and_then(|(_, rest)| rest.strip_suffix('>'))
-                        .is_some_and(|item| item == tag_name);
-                    let html_balanced = utilities::html_balanced(section, tag_name);
-                    if is_comment_end || (is_tag_end && html_balanced) {
-                        let element = HTMLElement(section);
-                        invoke!(MarkdownElement::HTMLElement(element));
-                    }
                 }
             }
             State::None => {
@@ -292,31 +284,6 @@ where
                         };
                         invoke!(MarkdownElement::Quote(quote_block));
                     }
-                } else if let Some(rest) = line.strip_prefix('<') {
-                    let trimmed = line.trim_end();
-                    if rest.starts_with("!--") {
-                        if trimmed.ends_with("-->") {
-                            let element = HTMLElement(line);
-                            invoke!(MarkdownElement::HTMLElement(element));
-                        } else {
-                            self.state = State::HTMLElement { tag_name: "!--" }
-                        }
-                    } else {
-                        let tag_name = rest
-                            .split_once(|chr: char| !chr.is_alphanumeric())
-                            .map_or(rest, |(l, _)| l);
-                        let single_line = trimmed.strip_suffix('>').is_some_and(|rest| {
-                            rest.rfind("</")
-                                .is_some_and(|idx| &rest[2..][idx..] == tag_name)
-                        });
-
-                        if single_line {
-                            let element = HTMLElement(line);
-                            invoke!(MarkdownElement::HTMLElement(element));
-                        } else {
-                            self.state = State::HTMLElement { tag_name };
-                        }
-                    }
                 } else if let Some(line) = line.trim_start().strip_prefix("%%") {
                     if let Some(out) = line.trim_end().strip_suffix("%%") {
                         let comment_block = MarkdownElement::CommentBlock(out.trim());
@@ -328,21 +295,37 @@ where
                 } else if self.reader.is_at_start() && "---" == line.trim() {
                     self.state = State::Frontmatter;
                     self.reader.moving_on();
-                } else if let Some(line) = line.strip_prefix("{%").map(str::trim_end) {
-                    if let Some(command_line) = line.strip_suffix("/%}").map(str::trim) {
-                        let (current_command, arguments) =
-                            command_line.split_once(' ').unwrap_or((command_line, ""));
-                        let command_block = CommandBlock {
-                            name: current_command,
-                            arguments,
-                            inner: RawMarkdown("", ContainerResidue::default()),
-                        };
-                        invoke!(MarkdownElement::CommandBlock(command_block));
-                    } else if let Some(command_line) = line.strip_suffix("%}").map(str::trim) {
-                        let (name, arguments) =
-                            command_line.split_once(' ').unwrap_or((command_line, ""));
-                        self.state = State::Command { name, arguments };
-                        self.reader.moving_on();
+                } else if let Some(line) = line.strip_prefix("{%") {
+                    let line = line.trim_end();
+                    if let Some(command_line) = line.strip_suffix("%}") {
+                        if let Some(end) = command_line.strip_suffix('/') {
+                            let (current_command, arguments) =
+                                command_line.split_once(' ').unwrap_or((command_line, ""));
+                            let command_block = CommandBlock {
+                                name: current_command,
+                                arguments,
+                                inner: RawMarkdown("", ContainerResidue::default()),
+                            };
+                            invoke!(MarkdownElement::CommandBlock(command_block));
+                        } else if let Some((before, command_line)) = command_line.rsplit_once("{%")
+                        {
+                            let inner = if let Some(name) = command_line.strip_prefix('/') {
+                                Some(name)
+                            } else if let (true, Some(name)) = (
+                                self.options.end_command_syntax,
+                                command_line.strip_prefix("end"),
+                            ) {
+                                Some(name)
+                            } else {
+                                None
+                            };
+                            todo!("{inner:?}");
+                        } else {
+                            let (name, arguments) =
+                                command_line.split_once(' ').unwrap_or((command_line, ""));
+                            self.state = State::Command { name, arguments };
+                            self.reader.moving_on();
+                        }
                     } else {
                         self.state = State::CommandHeader;
                     }
@@ -407,8 +390,10 @@ where
                                 .peek_line()
                                 .map(|line| self.container_residue.strip_prefix(line))
                                 .is_some_and(|rest| {
-                                    rest.starts_with(char::is_alphanumeric)
+                                    rest.starts_with(char::is_alphabetic)
                                         || rest.starts_with(['[', '!'])
+                                        || (rest.starts_with(|chr: char| chr.is_ascii_digit())
+                                            && !rest.starts_with("1) "))
                                 });
 
                         if continuation {
@@ -467,7 +452,7 @@ impl<'a> Iterator for PartsIterator<'a> {
         } else {
             let range = &self.on[self.last..];
             let first_char = range.chars().next()?;
-            let after = &range[1..];
+            let after = &range[first_char.len_utf8()..];
             let mut escaped = false;
             match first_char {
                 '$' => {
@@ -508,7 +493,7 @@ impl<'a> Iterator for PartsIterator<'a> {
                 }
                 '#' => {
                     let idx = after
-                        .find(|chr: char| chr.is_whitespace())
+                        .find(|chr: char| !chr.is_alphanumeric())
                         .unwrap_or(after.len());
                     self.last += idx + 1;
                     Some(MarkdownTextElement {
@@ -563,13 +548,14 @@ impl<'a> Iterator for PartsIterator<'a> {
                 '<' if after
                     .starts_with(|chr: char| chr.is_alphanumeric() || matches!(chr, '!')) =>
                 {
-                    let scheme_space = after.get(..32).unwrap_or(after);
-                    let is_scheme = scheme_space.find(':').is_some_and(|idx| {
-                        scheme_space[..idx]
+                    // For link escapes <https://google.com>
+                    let url_scheme_space = after.get(..32).unwrap_or(after);
+                    let is_url_scheme = url_scheme_space.find(':').is_some_and(|idx| {
+                        url_scheme_space[..idx]
                             .chars()
                             .all(|chr| chr.is_alphanumeric() || matches!(chr, '+' | '.' | '-'))
                     });
-                    if is_scheme {
+                    if is_url_scheme {
                         let Some(idx) = range.find('>') else {
                             todo!("no end to autolink found. return error")
                         };
@@ -596,22 +582,28 @@ impl<'a> Iterator for PartsIterator<'a> {
                             if let Some(idx) = after.find(|chr: char| !chr.is_alphanumeric()) {
                                 &after[..idx]
                             } else {
-                                todo!("no error to tag name")
+                                todo!("no end to tag name")
                             };
 
-                        let mut depth: u8 = 0;
+                        let mut depth: u8 = 1;
                         let mut last_idx = range.len();
-                        for (idx, _matched) in range.match_indices('<') {
-                            if range[idx..]
+                        // TODO are there issues with strings here etc?
+                        let after = &after[tag_name.len()..];
+                        for (idx, _matched) in after.match_indices('<') {
+                            if after[idx..]
                                 .strip_prefix("</")
                                 .is_some_and(|rest| rest.starts_with(tag_name))
                             {
                                 depth = depth.saturating_sub(1);
                                 if depth == 0 {
-                                    last_idx = idx + 2 + tag_name.len() + 1;
+                                    last_idx = 4 + idx + 2 * tag_name.len();
                                     break;
                                 }
-                            } else if range[idx..][1..].starts_with(tag_name) {
+                            } else if after[idx..]
+                                .strip_prefix('<')
+                                .and_then(|after| after.strip_prefix(tag_name))
+                                .is_some_and(|after| !after.starts_with(char::is_alphanumeric))
+                            {
                                 depth += 1;
                             }
                         }
@@ -644,6 +636,7 @@ impl<'a> Iterator for PartsIterator<'a> {
                     })
                 }
                 '[' => {
+                    // TODO extract
                     let mut till_bracket = None;
                     // TODO test
                     for value in
@@ -684,6 +677,7 @@ impl<'a> Iterator for PartsIterator<'a> {
                 _ => {
                     let kind = MarkdownPart::Plain;
 
+                    // TODO maybe `match_indicies`?
                     for (idx, chr) in range.char_indices() {
                         if escaped {
                             escaped = false;
@@ -692,24 +686,41 @@ impl<'a> Iterator for PartsIterator<'a> {
                         let mut offset = idx;
                         let current_decoration = self.decoration;
                         let left = &range[idx..];
+                        let before = &range[..idx];
                         let r#yield = match chr {
                             '$' | '`' | '#' | '{' | '[' => true,
                             '!' => left.starts_with("!["),
                             ':' => left.chars().nth(1).is_some_and(char::is_alphanumeric),
                             '_' | '*' => {
+                                let after_alphabetic = before.ends_with(char::is_alphanumeric);
                                 // FUTURE lots invalid here
                                 if left.starts_with("___") || left.starts_with("***") {
                                     self.decoration ^= TextDecoration::BOLD;
                                     self.decoration ^= TextDecoration::EMPHASIS;
                                     offset += 3;
+                                    true
                                 } else if left.starts_with("__") || left.starts_with("**") {
-                                    self.decoration ^= TextDecoration::BOLD;
-                                    offset += 2;
+                                    // TODO more branches
+                                    let beginning =
+                                        (self.decoration & TextDecoration::BOLD).is_none();
+                                    if after_alphabetic && beginning {
+                                        false
+                                    } else {
+                                        self.decoration ^= TextDecoration::BOLD;
+                                        offset += 2;
+                                        true
+                                    }
                                 } else {
-                                    self.decoration ^= TextDecoration::EMPHASIS;
-                                    offset += 1;
+                                    let beginning =
+                                        (self.decoration & TextDecoration::EMPHASIS).is_none();
+                                    if after_alphabetic && beginning {
+                                        false
+                                    } else {
+                                        self.decoration ^= TextDecoration::EMPHASIS;
+                                        offset += 1;
+                                        true
+                                    }
                                 }
-                                true
                             }
                             '^' => {
                                 self.decoration ^= TextDecoration::SUPERSCRIPT;
@@ -765,7 +776,7 @@ impl<'a> Iterator for PartsIterator<'a> {
 
                     self.last = self.on.len();
 
-                    if !self.decoration.is_empty() {
+                    if !self.decoration.is_none() {
                         eprintln!("error during parts: {:?}", self.decoration);
                     }
 
@@ -783,6 +794,7 @@ impl<'a> Iterator for PartsIterator<'a> {
         }
     }
 }
+
 impl<'a> List<'a> {
     pub fn parse_inner<T>(
         &self,
@@ -878,39 +890,6 @@ impl<'a> ContainerResidue<'a> {
         }
     }
 
-    // #[must_use]
-    // pub fn strip_prefix<'b>(&self, mut on: &'b str) -> &'b str {
-    //     let Self(residue) = *self;
-    //     let mut origin = residue.trim_start();
-    //     for (_idx, _matched_indices) in origin.match_indices(&['>', '-', '*', '+']) {
-    //         if origin.starts_with('>') {
-    //             while let (Some(next_expected), Some(next_on)) = (
-    //                 origin.trim_start().strip_prefix('>'),
-    //                 utilities::strip_upto_three_spaces(on).strip_prefix('>'),
-    //             ) {
-    //                 origin = next_expected;
-    //                 on = next_on;
-    //             }
-    //         } else if origin.strip_prefix(EXTENDED_LIST_PREFIXES).is_some() ||
-    //             utilities::strip_number_prefix(origin).is_some()
-    //         {
-    //             // TODO need count spaces rather than strip prefix
-    //             let on = on
-    //                 .strip_prefix(&origin[..(origin.len() - origin.len())])
-    //                 .unwrap_or(on);
-    //             let on = on
-    //                 .strip_prefix('\t')
-    //                 .or_else(|| on.strip_prefix("  "))
-    //                 .unwrap_or(on);
-    //             return utilities::strip_upto_three_spaces(on);
-    //         }
-    //     }
-    //     if !residue.is_empty() {
-    //         eprintln!("prefix was {residue}");
-    //     }
-    //     utilities::strip_upto_three_spaces(on)
-    // }
-
     #[must_use]
     pub fn count_skippable(&self, on: &str) -> usize {
         on.len() - self.strip_prefix(on).len()
@@ -925,25 +904,5 @@ impl<'a> ContainerResidue<'a> {
             .unwrap();
         let diff = section.len() - after.len();
         Self(&section[..diff])
-    }
-}
-
-impl<'a> crate::Table<'a> {
-    pub fn rows(&self) -> impl Iterator<Item = TableRow<'a>> {
-        let mut lines = self.0.lines();
-        let header = lines.next().expect("no heading (empty table)");
-        std::iter::once(TableRow(header)).chain(lines.skip(1).map(TableRow))
-    }
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct TableRow<'a>(pub(crate) &'a str);
-
-impl<'a> TableRow<'a> {
-    pub fn cells(&self) -> impl Iterator<Item = crate::RawText<'a>> {
-        let inner = &self.0[1..(self.0.len() - 1)];
-        inner
-            .split('|')
-            .map(|part| crate::RawText(part, ContainerResidue::default()))
     }
 }
